@@ -4,7 +4,7 @@ AIE is a staged research project for investigating whether legitimately availabl
 pre-round information contains useful predictive information. The project does
 not assume that exact prediction is possible.
 
-**Current development phase: Phase 7 — Leakage-safe baseline prediction evaluation.**
+**Current development phase: Phase 8 — Chronological machine-learning experiments.**
 
 Phase 1 supplied configuration, logging, project directories, and SQLite
 connections. Phase 2 added a completed-round model, a versioned schema, and an
@@ -17,7 +17,9 @@ Phase 6 exports portable completed-round JSON and creates verified SQLite
 backups. Both operations are explicit local commands and preserve the live
 database. Phase 7 adds an offline empirical-frequency baseline for multiplier
 thresholds and chronological walk-forward evaluation. It uses only outcomes
-strictly earlier than each replay target.
+strictly earlier than each replay target. Phase 8 adds leakage-safe lag/rolling
+features and chronological logistic-regression experiments with train,
+validation, and untouched final test segments.
 **It does not connect to Aviator services, collect live data, make live pre-round
 predictions, or recommend bets.** Startup never inserts sample rounds or imports
 files automatically.
@@ -28,8 +30,8 @@ files automatically.
 - Git for version control.
 - VS Code or GitHub Codespaces, optionally with the Python extension.
 
-Only two third-party packages are needed: `python-dotenv` for configuration and
-`pytest` for tests. SQLite, pathlib, logging, typing, datetime, JSON, and Decimal
+`python-dotenv` handles configuration, `pytest` provides tests, and Phase 8 uses
+`scikit-learn` for the first controlled machine-learning experiment. SQLite, pathlib, logging, typing, datetime, JSON, and Decimal
 come with Python. The Phase 5 server uses standard-library HTTP support; its
 interface uses plain HTML, CSS, and JavaScript. There are no new dependencies,
 CDN scripts, external fonts, or external data requests.
@@ -128,7 +130,7 @@ Expected standard output on a fresh database with default settings:
 
 ```text
 Aviator Intelligence Engine
-Phase: 6
+Phase: 8
 Status: INITIALIZED
 Database: READY
 Schema version: 1
@@ -136,7 +138,7 @@ Rounds stored: 0
 Environment: DEVELOPMENT
 ```
 
-The count reflects stored records on later runs. **Development phase 6 keeps
+The count reflects stored records on later runs. **Development phase 8 keeps
 database schema version 1**, introduced in Phase 2. Existing Phase 2 records
 are preserved. Startup checks SQLite, initializes or verifies the schema,
 reports the count, and closes its connection. It does not import data.
@@ -168,7 +170,7 @@ Expected output begins:
 
 ```text
 Aviator Intelligence Engine
-Phase: 6
+Phase: 8
 Import: VALIDATED
 Rows validated: 0
 Database check: NOT RUN
@@ -244,7 +246,7 @@ For an empty database, this is successful and prints:
 
 ```text
 Aviator Intelligence Engine
-Phase: 6
+Phase: 8
 Analysis: NO_DATA
 Database rounds: 0
 Selected rounds: 0
@@ -332,7 +334,7 @@ Expected dashboard startup output:
 
 ```text
 Aviator Intelligence Engine
-Phase: 6
+Phase: 8
 Dashboard: RUNNING
 URL: http://127.0.0.1:8000
 Press Ctrl+C to stop.
@@ -518,7 +520,7 @@ Successful output begins:
 
 ```text
 Aviator Intelligence Engine
-Phase: 6
+Phase: 8
 Backup: VERIFIED
 Mode: CREATED
 Schema version: 1
@@ -589,6 +591,48 @@ claim that historical multipliers predict future multipliers, does not lock
 predictions before real future rounds, and does not establish predictive
 advantage. Live prediction timing and blind-test persistence remain later
 development phases.
+
+## Phase 8: chronological machine-learning experiments
+
+Phase 8 introduces the first controlled ML experiment. It intentionally starts
+with logistic regression rather than more complex models.
+
+Features are created only from completed outcomes before each target:
+
+- recent log-transformed multiplier lags;
+- rolling mean log multiplier;
+- rolling historical rates above configured thresholds.
+
+Extreme historical multipliers are capped for numerical stability before the
+log transform; the original stored results are not changed.
+
+The experiment uses one chronological source and splits eligible feature rows
+into training, validation, and final test blocks. Candidate logistic-regression
+regularization values are selected using validation Brier score only. After
+selection, the model is refit on training plus validation rows and evaluated on
+the untouched final test block. The Phase 7 historical-frequency baseline is
+scored on the same target threshold for comparison.
+
+Run an experiment:
+
+```bash
+python run_ml_experiment.py --source SOURCE_NAME
+```
+
+Save the reproducible JSON record:
+
+```bash
+python run_ml_experiment.py --source SOURCE_NAME --output phase8-experiment.json
+```
+
+The report contains the dataset SHA256 fingerprint, feature names and settings,
+chronological split settings, candidate hyperparameters, selected parameter,
+validation/test Brier scores, baseline test Brier score, and every final-test
+probability with its target index and actual binary outcome.
+
+This remains historical experimentation. A lower test Brier score in one sample
+does not prove future predictability. Phase 8 does not perform live prediction,
+blind-test locking, automated retraining, or wagering.
 
 ## Database migration and preservation
 
@@ -770,9 +814,9 @@ Current limitations:
 
 - No BetPawa connection, login, credentials, browser automation, scraper, or API integration.
 - No automatic acquisition of real or historical Aviator data; imports require a supplied local file.
-- No cryptographic verifier, inferential hypothesis tests, ML models, or live prediction engine; Phase 7 provides only an offline historical-frequency baseline.
+- No cryptographic verifier, inferential hypothesis tests, or live prediction engine; Phase 8 provides only controlled historical logistic-regression experiments.
 - No prediction accuracy claims, betting features, or transactions.
 - Local development dashboard only; no production deployment or application authentication.
 - Local backups only; no scheduled/offsite backup service or automatic restore.
 
-Development stops at Phase 7. The next phase requires a separate instruction.
+Development stops at Phase 8. The next phase requires a separate instruction.
