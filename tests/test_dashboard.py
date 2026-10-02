@@ -41,8 +41,8 @@ def seed(settings: Settings, values: list[str] | None = None, *, source: str = "
 
 
 @contextmanager
-def running(settings: Settings) -> Iterator[DashboardHTTPServer]:
-    with DashboardHTTPServer(settings, port=0) as server:
+def running(settings: Settings, **server_kwargs: object) -> Iterator[DashboardHTTPServer]:
+    with DashboardHTTPServer(settings, port=0, **server_kwargs) as server:
         thread = Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
         thread.start()
         try:
@@ -335,9 +335,7 @@ def test_hosted_server_accepts_configured_public_host(settings: Settings) -> Non
 
     with closing(connect_database(settings)) as connection:
         initialize_schema(connection)
-    with DashboardHTTPServer(
-        settings, port=0, bind_host="127.0.0.1", public_hosts=("app.example.test",)
-    ) as server:
+    with running(settings, public_hosts=("app.example.test",)) as server:
         status, _, _ = request(server, "/api/status", headers={"Host": "app.example.test"})
         assert status == 200
         status, _, body = request(server, "/api/status", headers={"Host": "evil.example.test"})
