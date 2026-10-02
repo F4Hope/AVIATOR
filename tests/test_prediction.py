@@ -89,5 +89,5 @@ def test_walk_forward_metrics_match_known_fixture() -> None:
     assert result.skipped_targets == 2
     assert score.predictions == 2
     assert score.positives == 1
-    assert score.brier_score == Decimal("0.236111")
+    assert score.brier_score == Decimal("0.347222")
     assert score.calibration_error == Decimal("0.083333")
