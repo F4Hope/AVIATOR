@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 
 
 PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
-DEVELOPMENT_PHASE: int = 5
+DEVELOPMENT_PHASE: int = 6
 LOG_LEVELS: tuple[str, ...] = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 ENVIRONMENTS: tuple[str, ...] = ("DEVELOPMENT", "TEST", "PRODUCTION")
 
@@ -25,6 +25,11 @@ class Settings:
     database_path: Path
     environment: str
     log_level: str
+
+    @property
+    def backup_dir(self) -> Path:
+        """Backups are local data; create this directory only on explicit backup."""
+        return self.database_dir / "backups"
 
     @property
     def required_directories(self) -> tuple[Path, ...]:

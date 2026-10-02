@@ -4,7 +4,7 @@ AIE is a staged research project for investigating whether legitimately availabl
 pre-round information contains useful predictive information. The project does
 not assume that exact prediction is possible.
 
-**Current development phase: Phase 5 — Local historical dashboard.**
+**Current development phase: Phase 6 — Round export and verified local backups.**
 
 Phase 1 supplied configuration, logging, project directories, and SQLite
 connections. Phase 2 added a completed-round model, a versioned schema, and an
@@ -13,6 +13,9 @@ and atomic batch storage. Phase 4 summarizes stored historical records from a
 read-only database snapshot and optionally exports an aggregate JSON report.
 Phase 5 presents these summaries in a local browser dashboard with source and
 UTC time filters, metadata coverage, and aggregate downloads.
+Phase 6 exports portable completed-round JSON and creates verified SQLite
+backups. Both operations are explicit local commands and preserve the live
+database.
 **It does not connect to Aviator services, collect live data, make predictions,
 or recommend bets.** Startup never inserts sample rounds or imports files
 automatically.
@@ -28,6 +31,7 @@ Only two third-party packages are needed: `python-dotenv` for configuration and
 come with Python. The Phase 5 server uses standard-library HTTP support; its
 interface uses plain HTML, CSS, and JavaScript. There are no new dependencies,
 CDN scripts, external fonts, or external data requests.
+Phase 6 uses only standard-library SQLite, JSON, hashing, and filesystem tools.
 
 ## GitHub Codespaces, Linux, or macOS installation
 
@@ -122,7 +126,7 @@ Expected standard output on a fresh database with default settings:
 
 ```text
 Aviator Intelligence Engine
-Phase: 5
+Phase: 6
 Status: INITIALIZED
 Database: READY
 Schema version: 1
@@ -130,7 +134,7 @@ Rounds stored: 0
 Environment: DEVELOPMENT
 ```
 
-The count reflects stored records on later runs. **Development phase 5 keeps
+The count reflects stored records on later runs. **Development phase 6 keeps
 database schema version 1**, introduced in Phase 2. Existing Phase 2 records
 are preserved. Startup checks SQLite, initializes or verifies the schema,
 reports the count, and closes its connection. It does not import data.
@@ -162,7 +166,7 @@ Expected output begins:
 
 ```text
 Aviator Intelligence Engine
-Phase: 5
+Phase: 6
 Import: VALIDATED
 Rows validated: 0
 Database check: NOT RUN
@@ -238,7 +242,7 @@ For an empty database, this is successful and prints:
 
 ```text
 Aviator Intelligence Engine
-Phase: 5
+Phase: 6
 Analysis: NO_DATA
 Database rounds: 0
 Selected rounds: 0
@@ -326,7 +330,7 @@ Expected dashboard startup output:
 
 ```text
 Aviator Intelligence Engine
-Phase: 5
+Phase: 6
 Dashboard: RUNNING
 URL: http://127.0.0.1:8000
 Press Ctrl+C to stop.
@@ -351,6 +355,7 @@ The interface displays:
 - First/last completion times, represented source count, schema, and environment.
 - Actual project status: local import available, live collection not connected,
   and prediction engine not implemented.
+  Phase 6 also lists round export and database backups as available via CLI.
 
 Enter an exact source name, or leave it blank for all sources. Suggestions are
 limited to the first 1,000 stored source names; other names can be typed manually.
@@ -396,6 +401,152 @@ and browser-origin checks support localhost and this Codespace's configured
 forwarded domain. Cookies, authorization headers, request targets, and payloads
 are not logged. Metadata suggestions and the analysis report use separate read
 transactions; all report counts and statistics share one snapshot.
+
+## Phase 6: export completed-round data
+
+Initialize with `python main.py`, then export stored rounds:
+
+```bash
+python export_rounds.py --output rounds-phase6.json
+```
+
+The file is `data/processed/rounds-phase6.json`. It uses the same AIE
+`format_version: 1` format accepted by `import_rounds.py`, with only
+`format_version` and `rounds` at the top level. A zero-round database produces a
+valid empty array and reports `Rounds exported: 0`; no records are fabricated.
+
+Exports retain source-scoped round IDs, exact decimal multiplier strings, all
+completion/collection/optional observation times, and complete stored pre/post/raw
+payloads. These are round-data exports, unlike the dashboard's aggregate JSON
+download. Database-assigned IDs and ingestion times are excluded from the
+portable format; importing into another database assigns new ones. Use a SQLite
+backup when those database details must also be preserved.
+
+The whole selection is read in one read-only transaction and ordered by
+completion time, source, and round ID. Source and time filters work as in analysis:
+
+```bash
+python export_rounds.py --start 2026-10-01T00:00:00Z --end 2026-10-02T00:00:00Z --output selected-rounds.json
+```
+
+`--source` selects one exact source; start is inclusive, end is exclusive, and
+times must include a timezone. The command refuses selections above **10,000
+rounds** or output above **10 MiB**, matching the existing importer. Narrow the
+filters to export smaller selections. There is no silent truncation, automatic
+splitting, or record omission. Whole-database backups have no import-format
+row-count or file-size limit.
+
+Complete stored fields are validated through the existing round model. Invalid
+or noncanonical records are refused, including duplicate JSON keys, authentication
+fields caught by the model, invalid timing, or values whose normalization would
+alter an exact replay. Export failures leave the live database and existing
+outputs unchanged. The validation is not a complete secret detector; the payload
+sanitization requirements above still apply.
+
+Files are fully written to a private temporary file, flushed, then atomically
+published. Existing outputs are preserved by default. To deliberately replace
+an export:
+
+```bash
+python export_rounds.py --output rounds-phase6.json --overwrite
+```
+
+`--output` accepts a plain JSON filename, not a path. Successful commands print
+the row counts, local output file, byte count, and SHA256 of the exact export
+bytes. These fingerprints identify a file; they do not authenticate the source
+or verify a game's result. `python export_rounds.py --help` lists all options.
+
+The exported file can be validated using the existing importer:
+
+```bash
+python import_rounds.py data/processed/rounds-phase6.json --dry-run
+```
+
+An actual re-import into the unchanged original database counts exact replays
+as duplicates and inserts nothing. Source/round-ID conflicts still fail and
+roll back the entire batch. Dry runs continue to check the file only, without
+checking database duplicates or conflicts.
+
+## Phase 6: create and verify a database backup
+
+Create a named backup and verify it again:
+
+```bash
+python backup_database.py --output phase6.sqlite3
+python backup_database.py --verify phase6.sqlite3
+```
+
+The file is `data/database/backups/phase6.sqlite3`. Backup paths come from the
+configuration's `Settings.backup_dir` property. The directory is created only
+by an explicit backup attempt after the source schema is verified. Normal
+startup does not create backups or this extra directory.
+
+For a new timestamped filename on each run:
+
+```bash
+python backup_database.py
+```
+
+Generated names contain a UTC timestamp including microseconds. Backups
+**never overwrite existing files**, including a concurrent target or symbolic
+link. Choose a different name if the requested one exists. The command does not
+offer an overwrite or restore option.
+
+The source is opened in SQLite read-only mode. A pinned read transaction gives
+the source count and SQLite backup API the same snapshot. The resulting copy
+retains round data, database-assigned IDs, ingestion times, migration history,
+indexes, and append-only triggers. It is made standalone in DELETE journal mode
+so the published file needs no accompanying WAL or journal file.
+
+Before publication, verification checks the managed schema, SQLite integrity
+and foreign keys, all stored round fields, canonical database metadata, and the
+source-snapshot count. Model checks are explicit because read-only integrity
+checking alone did not flag an invalid multiplier in the tested SQLite runtime.
+Invalid data is rejected without changing or repairing the source. Verification
+does not establish the authenticity of supplied round data or asserted timing.
+
+Copy progress, SQL work, record validation, and hashing check a 30-second
+processing budget. Contention or failed verification aborts publication;
+temporary database and journal files are cleaned up. The live database is never
+replaced. Snapshot reads may delay a writer in rollback-journal mode; WAL-mode
+concurrent insert checks confirm that newer commits are excluded consistently
+from the already pinned snapshot.
+
+Successful output begins:
+
+```text
+Aviator Intelligence Engine
+Phase: 6
+Backup: VERIFIED
+Mode: CREATED
+Schema version: 1
+Rounds backed up: 0
+File: data/database/backups/phase6.sqlite3
+```
+
+The round count reflects the copied snapshot. Byte count, SHA256, and
+`Database changes: NONE` follow. `--verify` reports `Mode: VERIFY_ONLY` and opens
+the named backup read-only; it works even when the live database is missing.
+Only regular files inside the configured backup directory are accepted, with a
+plain `.db`, `.sqlite`, or `.sqlite3` filename. Existing WAL-mode files are
+refused as non-standalone backups.
+
+You can compare against a previously recorded SHA256 with
+`--verify FILENAME --expect-sha256 DIGEST`. The digest must contain 64 hexadecimal
+characters; a mismatch fails verification. Without an expected digest, the
+command checks structure and data and reports the current file fingerprint.
+A digest is not a signature or proof of source authenticity. Use
+`python backup_database.py --help` for usage.
+
+These are **local backups in the same workspace**. For an independent copy,
+download the backup file from the Codespace Explorer to another storage location.
+Exports and backups are ignored by Git and can contain the complete stored
+payloads. No `.env`, raw input files, or separate processed reports
+are copied into the SQLite backup. Only the database contents are included.
+
+The dashboard remains read-only: it lists export and backup availability, but
+file creation is performed only by these command-line actions. Both commands
+return 0 on success, 1 on an operation failure, and 2 for invalid CLI usage.
 
 ## Database migration and preservation
 
@@ -497,7 +648,7 @@ python -m pytest
 ```
 
 The suite retains the 25 Phase 1 checks, 67 Phase 2 cases, 60 Phase 3 cases,
-and 59 Phase 4 cases, and adds 49 Phase 5 cases. It covers
+59 Phase 4 cases, and 49 Phase 5 cases, and adds 55 Phase 6 cases. It covers
 configuration, logging, directories, startup, migration rollback and version
 checks, validation, exact decimal/JSON persistence, chronological queries,
 duplicate conflicts, concurrent inserts, and preservation across restarts,
@@ -511,6 +662,12 @@ source and time filters, fixed error responses, missing/incompatible databases,
 invalid stored values, file-access boundaries, host/origin checks, rejected
 mutations, bounded source suggestions, analysis contention, log redaction,
 port validation, startup/shutdown, and unchanged database bytes.
+Phase 6 checks cover empty exports/backups, exact round-data replay, export into
+a fresh database, deterministic chronological ordering, filters, size/count
+limits, stored-field rejection, whole-database preservation, immutable triggers
+in the copy, verification and digest failures, corruption, failed flushing,
+timeouts, protected publication races, WAL snapshot consistency, private file
+permissions, and CLI behavior outside the project working directory.
 Database-writing tests use temporary directories. Synthetic records are labeled
 as test fixtures and never inserted into the application database by the suite
 or startup.
@@ -519,35 +676,36 @@ Phase 2 checkpoint: 92 tests passed locally on Python 3.12.14 and 3.14.2, and
 in the user's Codespace on Python 3.14.2. Phase 3 checkpoint: 152 tests passed
 locally on each version; the source was pushed to GitHub as commit `a8827de`.
 Phase 4 checkpoint: 211 tests passed locally on each version; the user's saved
-GitHub commit is `35b0111`. Phase 5 validation: **260 tests passed on each of
-Python 3.12.14 and 3.14.2** on Linux, using `python-dotenv` **1.2.4** and
-`pytest` **9.1.1**. A native Windows run has not been verified.
+GitHub commit is `35b0111`. Phase 5 checkpoint: 260 tests passed on each version;
+the saved GitHub commit is `33be399`, and the user confirmed the dashboard opens
+in Codespaces. Phase 6 validation: **315 tests passed on each of Python 3.12.14
+and 3.14.2** on Linux, using `python-dotenv` **1.2.4** and `pytest` **9.1.1**.
+A native Windows run has not been verified.
 Chromium browser checks verified filters with a non-UTC browser timezone,
 downloaded report contents, Reset and Refresh, escaped source names, error
 recovery without stale statistics, populated/empty states, no external requests,
 and layouts at widths of 320, 390, 768, 1024, and 1440 pixels. Browser checks
-used disposable synthetic fixtures, not real Aviator data. The live Codespaces
-forwarding path still needs to be opened in the user's Codespace.
+used disposable synthetic fixtures, not real Aviator data. Dashboard regression
+checks also passed after the Phase 6 status display update.
 
-## Phase 5 source changes
+## Phase 6 source changes
 
 | File | Change |
 | --- | --- |
-| `dashboard/server.py` | New local HTTP server, allowlisted assets, and read-only aggregate endpoints |
-| `dashboard/static/index.html` | New dashboard interface and accessible controls |
-| `dashboard/static/styles.css` | New responsive dashboard styling |
-| `dashboard/static/app.js` | New filters, refresh, empty/error states, and displayed-report downloads |
-| `dashboard/__init__.py` | Updated package description |
-| `run_dashboard.py` | New dashboard launch command |
-| `config/settings.py` | Shared development-phase constant |
-| `main.py`, `import_rounds.py`, `analyze_rounds.py` | Shared Phase 5 status with existing workflows preserved |
-| `analysis/reporting.py` | Shared Phase 5 report status; report version stays 1 |
-| `tests/test_dashboard.py` | New Phase 5 HTTP and launch tests |
-| `tests/test_analysis.py`, `tests/test_setup.py` | Existing checks adapted to current phase |
-| `README.md` | Dashboard usage, Codespaces steps, checks, and limitations |
+| `export_rounds.py` | New completed-round JSON export CLI |
+| `backup_database.py` | New backup creation and verification CLI |
+| `database/export.py` | Read-only snapshot selection and import-compatible round export |
+| `database/backup.py` | SQLite snapshot copy, verification, hashing, and protected publication |
+| `database/records.py` | Shared complete stored-round validation and portable serialization |
+| `utils/__init__.py`, `utils/files.py` | Portable output names, flushed writing, and atomic publication |
+| `config/settings.py` | Phase 6 constant and configured backup-directory property |
+| `dashboard/static/index.html`, `dashboard/static/app.js` | Current phase display and CLI export/backup status |
+| `tests/test_data_management.py` | New Phase 6 tests |
+| `tests/test_analysis.py`, `tests/test_setup.py`, `tests/test_dashboard.py` | Current-phase expectations |
+| `README.md` | Export, backup, verification, checks, and limitations |
 
 Configuration, directories, `.env.example`, `.gitignore`, and requirements
-remain compatible with Phase 4. Database schema version remains 1. Other
+remain compatible with Phase 5. Database schema version remains 1. Other
 feature packages remain placeholders.
 
 ## Git and current limitations
@@ -561,8 +719,8 @@ After reviewing and testing a source update in your own checkout:
 
 ```bash
 git status
-git add README.md config main.py import_rounds.py analyze_rounds.py run_dashboard.py analysis dashboard tests
-git commit -m "Implement AIE Phase 5 local dashboard"
+git add README.md config dashboard database utils export_rounds.py backup_database.py tests
+git commit -m "Implement AIE Phase 6 round export and verified backups"
 git push
 ```
 
@@ -573,5 +731,6 @@ Current limitations:
 - No cryptographic verifier, inferential hypothesis tests, prediction engine, or ML models.
 - No prediction accuracy claims, betting features, or transactions.
 - Local development dashboard only; no production deployment or application authentication.
+- Local backups only; no scheduled/offsite backup service or automatic restore.
 
-Development stops at Phase 5. Phase 6 requires a separate instruction.
+Development stops at Phase 6. Phase 7 requires a separate instruction.

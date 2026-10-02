@@ -70,6 +70,7 @@ function clearReport() {
 }
 
 function renderMetadata(metadata) {
+  for (const element of document.querySelectorAll(".development-phase")) element.textContent = String(metadata.phase).padStart(2, "0");
   text("sidebar-schema", metadata.schema_version);
   text("environment", metadata.environment);
   text("database-state", "Ready · read only");
