@@ -291,7 +291,7 @@ def test_json_report_contains_aggregates_without_raw_values(settings: Settings) 
     seed(settings, [fixture_record(1, raw_data={"note": marker})])
     report = analyze_database(settings)
     document = report_to_dict(report)
-    assert document["phase"] == 8 and document["report_version"] == document["schema_version"] == 1
+    assert document["phase"] == 9 and document["report_version"] == document["schema_version"] == 1
     assert document["multipliers"]["minimum"] == "1.25"
     assert document["numeric_policy"]["mean_decimal_places"] == 6
     serialized = json.dumps(document, allow_nan=False)
@@ -369,7 +369,7 @@ def test_cli_empty_analysis_and_export(settings: Settings, monkeypatch: pytest.M
     monkeypatch.setattr(command, "load_settings", lambda: settings)
     assert command.main(["--output", "analysis.json"]) == 0
     output = capsys.readouterr().out
-    assert "Phase: 8\nAnalysis: NO_DATA\nDatabase rounds: 0\nSelected rounds: 0" in output
+    assert "Phase: 9\nAnalysis: NO_DATA\nDatabase rounds: 0\nSelected rounds: 0" in output
     assert "Report: SAVED" in output
     assert (settings.processed_data_dir / "analysis.json").is_file()
 
