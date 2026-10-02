@@ -100,9 +100,9 @@ def test_empty_database_has_real_empty_states(settings: Settings) -> None:
         status, _, body = request(server, "/api/status")
         metadata = json.loads(body)
         assert status == 200 and metadata["sources"] == []
-        assert metadata["phase"] == 8 and metadata["schema_version"] == 1
+        assert metadata["phase"] == 9 and metadata["schema_version"] == 1
         assert metadata["prediction_engine"] == "ML_EXPERIMENTS_AVAILABLE"
-        assert metadata["live_collection"] == "NOT_CONNECTED"
+        assert metadata["live_collection"] == "DISCOVERY_PROBE_AVAILABLE"
         status, _, body = request(server, "/api/summary")
     report = json.loads(body)
     assert status == 200 and report["status"] == "NO_DATA"
@@ -317,6 +317,6 @@ def test_launch_and_interrupt_close_the_server_without_database_writes(settings:
     monkeypatch.setattr(command, "DashboardHTTPServer", InterruptServer)
     assert command.main([]) == 0
     output = capsys.readouterr().out
-    assert "Phase: 8\nDashboard: RUNNING\nURL: http://127.0.0.1:8000" in output
+    assert "Phase: 9\nDashboard: RUNNING\nURL: http://127.0.0.1:8000" in output
     assert opened[0].fileno() == -1
     assert not settings.data_dir.exists()
