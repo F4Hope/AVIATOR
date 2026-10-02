@@ -52,7 +52,7 @@ def dashboard_metadata(settings: Settings) -> dict[str, object]:
         "phase": DEVELOPMENT_PHASE, "environment": settings.environment,
         "database": "READY", "schema_version": version,
         "sources": sources, "source_suggestions_truncated": len(source_rows) > MAX_SOURCE_SUGGESTIONS,
-        "live_collection": "NOT_CONNECTED", "prediction_engine": "ML_EXPERIMENTS_AVAILABLE",
+        "live_collection": "DISCOVERY_PROBE_AVAILABLE", "prediction_engine": "ML_EXPERIMENTS_AVAILABLE",
     }
 
 
@@ -74,14 +74,28 @@ class DashboardHTTPServer(ThreadingHTTPServer):
 
     daemon_threads = True
 
-    def __init__(self, settings: Settings, port: int = 8000) -> None:
+    def __init__(
+        self, settings: Settings, port: int = 8000, bind_host: str = "127.0.0.1",
+        public_hosts: tuple[str, ...] = (),
+    ) -> None:
         if type(port) is not int or not 0 <= port <= 65535:
             raise ValueError("port must be an integer between 0 and 65535.")
+        if bind_host not in {"127.0.0.1", "0.0.0.0"}:
+            raise ValueError("bind_host must be 127.0.0.1 or 0.0.0.0.")
+        if not isinstance(public_hosts, tuple):
+            raise TypeError("public_hosts must be a tuple.")
+        validated_hosts: set[str] = set()
+        for host in public_hosts:
+            if not isinstance(host, str) or not re.fullmatch(
+                r"[A-Za-z0-9.-]{1,253}(?::[0-9]{1,5})?", host
+            ):
+                raise ValueError("public_hosts must contain plain hostnames or hostname:port values.")
+            validated_hosts.add(host.lower())
         self.settings = settings
         self.analysis_slots = BoundedSemaphore(2)
-        super().__init__(("127.0.0.1", port), DashboardHandler)
+        super().__init__((bind_host, port), DashboardHandler)
         actual_port = self.server_address[1]
-        authorities = {f"127.0.0.1:{actual_port}", f"localhost:{actual_port}"}
+        authorities = {f"127.0.0.1:{actual_port}", f"localhost:{actual_port}", *validated_hosts}
         name = os.getenv("CODESPACE_NAME", "").lower()
         domain = os.getenv("GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN", "app.github.dev").lower()
         if re.fullmatch(r"[a-z0-9-]{1,100}", name) and re.fullmatch(r"[a-z0-9.-]{1,200}", domain):

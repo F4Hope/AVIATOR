@@ -4,7 +4,7 @@ AIE is a staged research project for investigating whether legitimately availabl
 pre-round information contains useful predictive information. The project does
 not assume that exact prediction is possible.
 
-**Current development phase: Phase 8 — Chronological machine-learning experiments.**
+**Current development phase: Phase 9 — Hosted authenticated-browser discovery.**
 
 Phase 1 supplied configuration, logging, project directories, and SQLite
 connections. Phase 2 added a completed-round model, a versioned schema, and an
@@ -19,10 +19,12 @@ database. Phase 7 adds an offline empirical-frequency baseline for multiplier
 thresholds and chronological walk-forward evaluation. It uses only outcomes
 strictly earlier than each replay target. Phase 8 adds leakage-safe lag/rolling
 features and chronological logistic-regression experiments with train,
-validation, and untouched final test segments.
-**It does not connect to Aviator services, collect live data, make live pre-round
-predictions, or recommend bets.** Startup never inserts sample rounds or imports
-files automatically.
+validation, and untouched final test segments. Phase 9 adds a deployable
+persistent Browserless/Playwright environment for a user-authenticated browser
+session plus a sanitized network-discovery probe.
+**Phase 9 does not yet claim completed-round extraction or live prediction.**
+It first observes value-free endpoint and JSON-shape evidence so the actual
+provider message can be identified without inventing endpoints or fields.
 
 ## Requirements
 
@@ -634,6 +636,52 @@ This remains historical experimentation. A lower test Brier score in one sample
 does not prove future predictability. Phase 8 does not perform live prediction,
 blind-test locking, automated retraining, or wagering.
 
+## Phase 9: hosted authenticated-browser discovery
+
+Phase 9 adds the infrastructure required to link an authenticated BetPawa
+browser session without putting BetPawa credentials into AIE.
+
+The hosted Docker stack contains:
+
+- AIE dashboard and SQLite data on a persistent volume;
+- Browserless Chromium with a persistent browser-data volume;
+- Caddy HTTPS reverse proxy with Basic Auth;
+- an optional Playwright collector profile for sanitized network discovery.
+
+The public Browserless site is protected twice: Caddy Basic Auth protects the
+browser UI, and Browserless uses a separate random API token. Caddy injects that
+token server-side, so it does not need to appear in the public browser URL.
+
+The user logs into BetPawa manually inside the server-side browser. AIE does not
+store or request the BetPawa password/PIN. Browser cookies and local storage
+remain in the Browserless volume rather than the Git repository.
+
+Start sanitized discovery only after manual login:
+
+```bash
+docker compose --profile collector up -d collector
+```
+
+Inspect the value-free observation summary:
+
+```bash
+docker compose run --rm aie python inspect_aviator_probe.py
+```
+
+The probe removes URL query strings and does not intentionally persist request
+headers, cookies, authentication values, or raw WebSocket/JSON payload values.
+It records hashes, sizes, resource/content types, URLs without query strings,
+and JSON key paths. Sensitive JSON-key names such as authorization, cookie,
+token, session, secret, and password are omitted from structural output.
+
+That sanitized evidence is the gate for the next Phase 9 step: identify the
+actual observable completed-round event and bind an explicit parser for
+`BETPAWA_CM_AVIATOR`. Until that is verified, the dashboard reports live
+collection as discovery-only rather than connected.
+
+For the always-on VPS procedure, DNS/HTTPS setup, manual browser login, Docker
+commands, persistent volumes, and backups, see `deploy/README.md`.
+
 ## Database migration and preservation
 
 The default file is `data/database/aie.sqlite3`. First startup upgrades an empty
@@ -814,9 +862,9 @@ Current limitations:
 
 - No BetPawa connection, login, credentials, browser automation, scraper, or API integration.
 - No automatic acquisition of real or historical Aviator data; imports require a supplied local file.
-- No cryptographic verifier, inferential hypothesis tests, or live prediction engine; Phase 8 provides only controlled historical logistic-regression experiments.
+- No cryptographic verifier, inferential hypothesis tests, verified BetPawa round parser, or live prediction engine; Phase 9 currently provides authenticated-browser hosting and sanitized discovery.
 - No prediction accuracy claims, betting features, or transactions.
 - Local development dashboard only; no production deployment or application authentication.
 - Local backups only; no scheduled/offsite backup service or automatic restore.
 
-Development stops at Phase 8. The next phase requires a separate instruction.
+Development is at Phase 9 browser discovery. Verified provider-specific round extraction is the next required checkpoint.

@@ -1,0 +1,16 @@
+{$AIE_APP_DOMAIN} {
+    basic_auth {
+        {$AIE_BASIC_AUTH_USER} {$AIE_BASIC_AUTH_HASH}
+    }
+    reverse_proxy aie:8000
+}
+
+{$AIE_BROWSER_DOMAIN} {
+    basic_auth {
+        {$AIE_BASIC_AUTH_USER} {$AIE_BASIC_AUTH_HASH}
+    }
+    # Browserless expects its API token as a query parameter. Inject it here
+    # so the secret never needs to appear in the user's public browser URL.
+    uri query token {$AIE_BROWSERLESS_TOKEN}
+    reverse_proxy browserless:3000
+}

@@ -21,3 +21,12 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -r requirements.txt
       - run: python -m pytest
+      - name: Validate Docker Compose
+        env:
+          AIE_APP_DOMAIN: app.example.test
+          AIE_BROWSER_DOMAIN: browser.example.test
+          AIE_BASIC_AUTH_USER: aie
+          AIE_BASIC_AUTH_HASH: '$2a$14$abcdefghijklmnopqrstuvabcdefghijklmnopqrstuv1234567890'
+          AIE_BROWSERLESS_TOKEN: synthetic-browser-token
+          AIE_BETPAWA_AVIATOR_URL: https://example.test/aviator
+        run: docker compose config --quiet

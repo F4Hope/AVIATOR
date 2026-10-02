@@ -14,7 +14,15 @@ logger = logging.getLogger("aie.run_dashboard")
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Open the local read-only AIE dashboard.")
-    parser.add_argument("--port", type=int, default=8000, help="Local port, default 8000")
+    parser.add_argument("--port", type=int, default=8000, help="Dashboard port, default 8000")
+    parser.add_argument(
+        "--host", choices=("127.0.0.1", "0.0.0.0"), default="127.0.0.1",
+        help="Bind host; use 0.0.0.0 only behind a trusted reverse proxy.",
+    )
+    parser.add_argument(
+        "--public-host", action="append", default=[],
+        help="Allowed public Host header, e.g. app.example.com. Repeat as needed.",
+    )
     arguments = parser.parse_args(argv)
     if not 1 <= arguments.port <= 65535:
         parser.error("--port must be between 1 and 65535")
@@ -24,10 +32,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         settings = load_settings()
         configure_logging(settings.log_level)
-        with DashboardHTTPServer(settings, arguments.port) as server:
+        with DashboardHTTPServer(settings, arguments.port, arguments.host, tuple(arguments.public_host)) as server:
             print(
                 f"Aviator Intelligence Engine\nPhase: {DEVELOPMENT_PHASE}\n"
-                f"Dashboard: RUNNING\nURL: http://127.0.0.1:{arguments.port}\n"
+                f"Dashboard: RUNNING\nURL: http://{arguments.host}:{arguments.port}\n"
                 "Press Ctrl+C to stop.", flush=True,
             )
             server.serve_forever(poll_interval=0.25)
