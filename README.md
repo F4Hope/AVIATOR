@@ -4,13 +4,15 @@ AIE is a staged research project for investigating whether legitimately availabl
 pre-round information contains useful predictive information. The project does
 not assume that exact prediction is possible.
 
-**Current development phase: Phase 4 — Descriptive analysis and reports.**
+**Current development phase: Phase 5 — Local historical dashboard.**
 
 Phase 1 supplied configuration, logging, project directories, and SQLite
 connections. Phase 2 added a completed-round model, a versioned schema, and an
 append-only repository. Phase 3 added validated local JSON imports, dry runs,
 and atomic batch storage. Phase 4 summarizes stored historical records from a
 read-only database snapshot and optionally exports an aggregate JSON report.
+Phase 5 presents these summaries in a local browser dashboard with source and
+UTC time filters, metadata coverage, and aggregate downloads.
 **It does not connect to Aviator services, collect live data, make predictions,
 or recommend bets.** Startup never inserts sample rounds or imports files
 automatically.
@@ -23,7 +25,9 @@ automatically.
 
 Only two third-party packages are needed: `python-dotenv` for configuration and
 `pytest` for tests. SQLite, pathlib, logging, typing, datetime, JSON, and Decimal
-come with Python. Phase 4 adds no dependencies.
+come with Python. The Phase 5 server uses standard-library HTTP support; its
+interface uses plain HTML, CSS, and JavaScript. There are no new dependencies,
+CDN scripts, external fonts, or external data requests.
 
 ## GitHub Codespaces, Linux, or macOS installation
 
@@ -118,7 +122,7 @@ Expected standard output on a fresh database with default settings:
 
 ```text
 Aviator Intelligence Engine
-Phase: 4
+Phase: 5
 Status: INITIALIZED
 Database: READY
 Schema version: 1
@@ -126,7 +130,7 @@ Rounds stored: 0
 Environment: DEVELOPMENT
 ```
 
-The count reflects stored records on later runs. **Development phase 4 keeps
+The count reflects stored records on later runs. **Development phase 5 keeps
 database schema version 1**, introduced in Phase 2. Existing Phase 2 records
 are preserved. Startup checks SQLite, initializes or verifies the schema,
 reports the count, and closes its connection. It does not import data.
@@ -158,7 +162,7 @@ Expected output begins:
 
 ```text
 Aviator Intelligence Engine
-Phase: 4
+Phase: 5
 Import: VALIDATED
 Rows validated: 0
 Database check: NOT RUN
@@ -234,7 +238,7 @@ For an empty database, this is successful and prints:
 
 ```text
 Aviator Intelligence Engine
-Phase: 4
+Phase: 5
 Analysis: NO_DATA
 Database rounds: 0
 Selected rounds: 0
@@ -308,6 +312,90 @@ Repeated timestamps can reflect limited timestamp precision and do not prove
 duplicate rounds. Observed bucket percentages describe this stored sample;
 they are not forecasts or betting signals. Analysis cannot establish source
 authenticity, prove complete capture, or verify the asserted pre-round timing.
+
+## Phase 5: local dashboard
+
+Initialize the application, then start the dashboard:
+
+```bash
+python main.py
+python run_dashboard.py
+```
+
+Expected dashboard startup output:
+
+```text
+Aviator Intelligence Engine
+Phase: 5
+Dashboard: RUNNING
+URL: http://127.0.0.1:8000
+Press Ctrl+C to stop.
+```
+
+On your own computer, open `http://127.0.0.1:8000` in your browser. In GitHub
+Codespaces, click the terminal URL, or open **PORTS**, add **8000** if it is not
+listed, and choose **Open in Browser** for that port. Keep **Port Visibility**
+set to **Private**. Use the standalone browser tab. The server listens only on
+loopback; Codespaces supplies the forwarded connection. Port-forwarding guide:
+[GitHub Docs](https://docs.github.com/en/codespaces/developing-in-a-codespace/forwarding-ports-in-your-codespace).
+
+Keep the terminal running while viewing the dashboard. **Ctrl+C** stops it;
+use another terminal for imports, tests, or Git commands. For a different port,
+run `python run_dashboard.py --port 8001` and forward port 8001 instead.
+
+The interface displays:
+
+- Selected and total record counts, mean, median, and minimum/maximum multipliers.
+- Four historical multiplier ranges with actual counts and percentages.
+- Optional metadata coverage, mean collection delay, and repeated result timestamps.
+- First/last completion times, represented source count, schema, and environment.
+- Actual project status: local import available, live collection not connected,
+  and prediction engine not implemented.
+
+Enter an exact source name, or leave it blank for all sources. Suggestions are
+limited to the first 1,000 stored source names; other names can be typed manually.
+**From** and **Until** controls explicitly use **UTC**, regardless of the
+browser's timezone. Start is inclusive and end is exclusive. Click **Apply
+filters** to update the selection, **Reset** to clear the filters, or **Refresh**
+to read newly imported records with the currently applied filters. This phase
+does not poll or collect live data.
+
+**Download JSON** saves the aggregate report currently displayed to your
+browser's download folder. It preserves decimal strings and includes the
+selection filters and generation time; no round IDs or payload values are
+included. A valid empty selection can be downloaded as a `NO_DATA` report.
+Downloads create no report file on the server and never alter the database.
+
+The dashboard opens the existing database in SQLite read-only mode and reuses
+Phase 4's snapshot analysis and 100,000-selected-round limit. It performs no
+schema initialization or migration. On a missing database, run `python main.py`
+and refresh. Invalid filters, unreadable/incompatible databases, invalid stored
+records, and oversized selections show an error and clear the prior report.
+A fresh zero-round database displays zero counts and unavailable statistics;
+no demonstration rounds are inserted.
+
+This is a local development dashboard using Python's HTTP server, not a
+production hosting service. It has no application login or authorization system;
+private Codespaces forwarding provides access control in that environment.
+There are no import, edit, delete, betting, or prediction controls in the UI.
+The layout adapts to smaller screens and includes keyboard labels, a skip link,
+and progress labels.
+
+For development, the server serves only allowlisted static assets and these
+read-only application endpoints:
+
+| Endpoint | Response |
+| --- | --- |
+| `GET /api/status` | Schema, environment, bounded source suggestions, and implemented-feature status |
+| `GET /api/summary` | Aggregate Phase 4 report using optional `source`, `start`, and `end` filters |
+| `GET /api/report` | The same aggregate format with an attachment header; each request reads a fresh snapshot |
+
+API times must include a timezone. Unknown/repeated filters and mutating HTTP
+methods are refused. Asset paths cannot expose arbitrary project files. Host
+and browser-origin checks support localhost and this Codespace's configured
+forwarded domain. Cookies, authorization headers, request targets, and payloads
+are not logged. Metadata suggestions and the analysis report use separate read
+transactions; all report counts and statistics share one snapshot.
 
 ## Database migration and preservation
 
@@ -408,8 +496,8 @@ Or explicitly use the selected interpreter:
 python -m pytest
 ```
 
-The suite retains the 25 Phase 1 checks, 67 Phase 2 cases, and 60 Phase 3 cases,
-and adds 59 Phase 4 cases. It covers
+The suite retains the 25 Phase 1 checks, 67 Phase 2 cases, 60 Phase 3 cases,
+and 59 Phase 4 cases, and adds 49 Phase 5 cases. It covers
 configuration, logging, directories, startup, migration rollback and version
 checks, validation, exact decimal/JSON persistence, chronological queries,
 duplicate conflicts, concurrent inserts, and preservation across restarts,
@@ -418,6 +506,11 @@ Phase 4 tests cover empty selections, bucket boundaries, high-precision decimals
 rounding and context isolation, filtering, snapshot consistency during writes,
 read-only connections, stored-data rejection, report publication and overwrite
 protection, and the analysis CLI.
+Phase 5 tests exercise static assets, HTTP summaries and downloads, empty states,
+source and time filters, fixed error responses, missing/incompatible databases,
+invalid stored values, file-access boundaries, host/origin checks, rejected
+mutations, bounded source suggestions, analysis contention, log redaction,
+port validation, startup/shutdown, and unchanged database bytes.
 Database-writing tests use temporary directories. Synthetic records are labeled
 as test fixtures and never inserted into the application database by the suite
 or startup.
@@ -425,28 +518,36 @@ or startup.
 Phase 2 checkpoint: 92 tests passed locally on Python 3.12.14 and 3.14.2, and
 in the user's Codespace on Python 3.14.2. Phase 3 checkpoint: 152 tests passed
 locally on each version; the source was pushed to GitHub as commit `a8827de`.
-Phase 4 validation: **211 tests passed on each of Python 3.12.14 and 3.14.2**
-on Linux, using `python-dotenv` **1.2.4** and `pytest` **9.1.1**. Startup and
-empty-database report export succeeded. A native Windows run has not been verified.
+Phase 4 checkpoint: 211 tests passed locally on each version; the user's saved
+GitHub commit is `35b0111`. Phase 5 validation: **260 tests passed on each of
+Python 3.12.14 and 3.14.2** on Linux, using `python-dotenv` **1.2.4** and
+`pytest` **9.1.1**. A native Windows run has not been verified.
+Chromium browser checks verified filters with a non-UTC browser timezone,
+downloaded report contents, Reset and Refresh, escaped source names, error
+recovery without stale statistics, populated/empty states, no external requests,
+and layouts at widths of 320, 390, 768, 1024, and 1440 pixels. Browser checks
+used disposable synthetic fixtures, not real Aviator data. The live Codespaces
+forwarding path still needs to be opened in the user's Codespace.
 
-## Phase 4 source changes
+## Phase 5 source changes
 
 | File | Change |
 | --- | --- |
-| `analysis/descriptive.py` | New historical statistics, filters, snapshot reading, and metadata checks |
-| `analysis/reporting.py` | New aggregate JSON serialization and protected report publication |
-| `analysis/__init__.py` | Updated package description |
-| `analyze_rounds.py` | New analysis and report-export command |
-| `database/database.py` | Additional read-only connection function |
-| `database/migrations.py` | Additional schema verification function that performs no migrations |
-| `main.py` | Phase 4 startup status |
-| `import_rounds.py` | Phase 4 status while retaining the existing import workflow |
-| `tests/test_analysis.py` | New Phase 4 tests |
-| `tests/test_setup.py` | Existing checks adapted to Phase 4 startup |
-| `README.md` | Updated installation, usage, and limitations |
+| `dashboard/server.py` | New local HTTP server, allowlisted assets, and read-only aggregate endpoints |
+| `dashboard/static/index.html` | New dashboard interface and accessible controls |
+| `dashboard/static/styles.css` | New responsive dashboard styling |
+| `dashboard/static/app.js` | New filters, refresh, empty/error states, and displayed-report downloads |
+| `dashboard/__init__.py` | Updated package description |
+| `run_dashboard.py` | New dashboard launch command |
+| `config/settings.py` | Shared development-phase constant |
+| `main.py`, `import_rounds.py`, `analyze_rounds.py` | Shared Phase 5 status with existing workflows preserved |
+| `analysis/reporting.py` | Shared Phase 5 report status; report version stays 1 |
+| `tests/test_dashboard.py` | New Phase 5 HTTP and launch tests |
+| `tests/test_analysis.py`, `tests/test_setup.py` | Existing checks adapted to current phase |
+| `README.md` | Dashboard usage, Codespaces steps, checks, and limitations |
 
 Configuration, directories, `.env.example`, `.gitignore`, and requirements
-remain compatible with Phase 3. Database schema version remains 1. Other
+remain compatible with Phase 4. Database schema version remains 1. Other
 feature packages remain placeholders.
 
 ## Git and current limitations
@@ -460,8 +561,8 @@ After reviewing and testing a source update in your own checkout:
 
 ```bash
 git status
-git add README.md main.py import_rounds.py analyze_rounds.py analysis database tests
-git commit -m "Implement AIE Phase 4 descriptive analysis"
+git add README.md config main.py import_rounds.py analyze_rounds.py run_dashboard.py analysis dashboard tests
+git commit -m "Implement AIE Phase 5 local dashboard"
 git push
 ```
 
@@ -470,6 +571,7 @@ Current limitations:
 - No BetPawa connection, login, credentials, browser automation, scraper, or API integration.
 - No automatic acquisition of real or historical Aviator data; imports require a supplied local file.
 - No cryptographic verifier, inferential hypothesis tests, prediction engine, or ML models.
-- No prediction accuracy claims, dashboard implementation, betting features, or transactions.
+- No prediction accuracy claims, betting features, or transactions.
+- Local development dashboard only; no production deployment or application authentication.
 
-Development stops at Phase 4. Phase 5 requires a separate instruction.
+Development stops at Phase 5. Phase 6 requires a separate instruction.

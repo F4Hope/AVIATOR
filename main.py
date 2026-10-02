@@ -1,4 +1,4 @@
-"""Phase 4 startup entry point for the Aviator Intelligence Engine."""
+"""Startup entry point for the Aviator Intelligence Engine."""
 
 from contextlib import closing
 from dataclasses import dataclass
@@ -7,7 +7,7 @@ import sqlite3
 import sys
 
 from config.logging_config import configure_logging
-from config.settings import Settings, ensure_directories, load_settings
+from config.settings import DEVELOPMENT_PHASE, Settings, ensure_directories, load_settings
 from database.database import connect_database
 from database.migrations import initialize_schema
 from database.repository import RoundRepository
@@ -40,7 +40,7 @@ def initialize_application(settings: Settings | None = None) -> StartupState:
     if not all(directory.is_dir() for directory in active_settings.required_directories):
         raise RuntimeError("Required directory check failed.")
 
-    logger.info("Phase 4 initialization complete; schema version %s.", schema_version)
+    logger.info("Phase %s initialization complete; schema version %s.", DEVELOPMENT_PHASE, schema_version)
     return StartupState(active_settings, schema_version, rounds_stored)
 
 
@@ -60,7 +60,7 @@ def main() -> int:
 
     print(
         "Aviator Intelligence Engine\n"
-        "Phase: 4\n"
+        f"Phase: {DEVELOPMENT_PHASE}\n"
         "Status: INITIALIZED\n"
         "Database: READY\n"
         f"Schema version: {state.schema_version}\n"

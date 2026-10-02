@@ -11,7 +11,7 @@ import tempfile
 from analysis.descriptive import (
     ARITHMETIC_PRECISION, MEAN_DECIMAL_PLACES, PERCENTAGE_DECIMAL_PLACES, AnalysisReport,
 )
-from config.settings import Settings
+from config.settings import DEVELOPMENT_PHASE, Settings
 from database.models import timestamp_text
 
 
@@ -43,7 +43,7 @@ def report_to_dict(report: AnalysisReport) -> dict[str, object]:
         raise TypeError("report must be AnalysisReport.")
     result = {field.name: _json_value(getattr(report, field.name)) for field in fields(report)}
     result.update({
-        "report_version": REPORT_VERSION, "phase": 4, "status": report.status,
+        "report_version": REPORT_VERSION, "phase": DEVELOPMENT_PHASE, "status": report.status,
         "numeric_policy": {
             "arithmetic_precision": ARITHMETIC_PRECISION,
             "mean_decimal_places": MEAN_DECIMAL_PLACES,

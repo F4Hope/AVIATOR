@@ -8,7 +8,7 @@ import sys
 
 from collectors.json_importer import ImportValidationError, import_json_file
 from config.logging_config import configure_logging
-from config.settings import load_settings
+from config.settings import DEVELOPMENT_PHASE, load_settings
 from database.repository import DuplicateRoundError
 
 
@@ -42,7 +42,7 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("Import failed. Check configuration, database compatibility, and file permissions.")
         return 1
 
-    print("Aviator Intelligence Engine\nPhase: 4")
+    print(f"Aviator Intelligence Engine\nPhase: {DEVELOPMENT_PHASE}")
     if report.dry_run:
         print(f"Import: VALIDATED\nRows validated: {report.rows_read}\nDatabase check: NOT RUN\nDatabase changes: NONE")
     else:

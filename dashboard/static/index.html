@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>AIE · Historical overview</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to overview</a>
+  <aside class="sidebar" aria-label="Project navigation">
+    <a class="brand" href="/" aria-label="Aviator Intelligence Engine home"><span class="brand-mark">A</span><span>AIE<small>AVIATOR INTELLIGENCE</small></span></a>
+    <div class="phase-label"><span class="dot"></span> PHASE 05 <span>Dashboard</span></div>
+    <nav>
+      <a href="#overview" class="nav-primary"><span aria-hidden="true">▦</span> Overview</a>
+      <a href="#distribution"><span aria-hidden="true">▤</span> Distribution</a>
+      <a href="#quality"><span aria-hidden="true">◈</span> Data coverage</a>
+      <a href="#project-status"><span aria-hidden="true">◉</span> Project status</a>
+    </nav>
+    <div class="sidebar-footer"><span class="eyebrow">LOCAL DATASET</span><p>Historical records.<br>Read-only exploration.</p><span class="sidebar-tag">SQLite · schema <span id="sidebar-schema">—</span></span></div>
+  </aside>
+  <main id="main">
+    <header id="overview" class="page-header">
+      <div><div class="eyebrow">AVIATOR INTELLIGENCE ENGINE / RESEARCH</div><h1>Historical overview<span class="accent">.</span></h1><p class="subtitle">Explore completed rounds stored in your project.</p></div>
+      <div class="header-actions"><span class="badge">READ ONLY</span><button id="refresh" class="button secondary" type="button"><span aria-hidden="true">↻</span> Refresh</button></div>
+    </header>
+    <section class="filter-panel" aria-label="Historical data filters">
+      <form id="filters">
+        <div class="field source-field"><label for="source">Source</label><input id="source" name="source" list="source-options" placeholder="All sources" autocomplete="off"><datalist id="source-options"></datalist></div>
+        <div class="field"><label for="start">From · UTC</label><input id="start" name="start" type="datetime-local" step="1"></div>
+        <div class="field"><label for="end">Until · UTC <span class="muted">(exclusive)</span></label><input id="end" name="end" type="datetime-local" step="1"></div>
+        <div class="filter-actions"><button class="button primary" id="apply" type="submit">Apply filters</button><button class="button text" id="reset-filters" type="button">Reset</button></div>
+      </form>
+      <p class="filter-note">Filters use round completion times. Enter an exact source name, or leave it blank for all sources.<span id="suggestions-note" hidden> Source suggestions are limited to the first 1,000 names.</span></p>
+    </section>
+    <div class="view-meta"><p id="selection" aria-live="polite">Loading local dataset…</p><span id="updated">—</span></div>
+    <div id="error" class="error-panel" role="alert" hidden></div>
+    <section class="metrics" aria-label="Selected round statistics">
+      <article class="metric"><div class="metric-label">SELECTED ROUNDS <span aria-hidden="true">↗</span></div><div id="selected-rounds" class="metric-value">—</div><p id="stored-rounds">Waiting for the database</p></article>
+      <article class="metric"><div class="metric-label">MEAN MULTIPLIER</div><div id="mean" class="metric-value">—</div><p>Arithmetic mean · historical data</p></article>
+      <article class="metric"><div class="metric-label">MEDIAN MULTIPLIER</div><div id="median" class="metric-value">—</div><p>Middle value of selected rounds</p></article>
+      <article class="metric"><div class="metric-label">HIGHEST MULTIPLIER</div><div id="maximum" class="metric-value">—</div><p id="minimum">Lowest multiplier: —</p></article>
+    </section>
+    <div class="content-grid">
+      <section id="distribution" class="panel distribution-panel">
+        <div class="panel-heading"><div><span class="eyebrow">COMPLETED ROUNDS</span><h2>Multiplier distribution</h2></div><span class="panel-tag">4 fixed ranges</span></div>
+        <p class="panel-description">Observed frequencies within your current selection.</p>
+        <div id="distribution-empty" class="empty-state"><span class="empty-symbol" aria-hidden="true">▤</span><h3>No rounds to display</h3><p>Import completed rounds to explore their historical distribution.</p></div>
+        <div id="buckets" class="buckets" hidden></div>
+        <div class="panel-footnote">Historical frequencies describe this dataset. They do not predict the next round.</div>
+      </section>
+      <section id="quality" class="panel quality-panel">
+        <div class="panel-heading"><div><span class="eyebrow">AVAILABLE METADATA</span><h2>Data coverage</h2></div><span class="panel-tag">Selected rows</span></div>
+        <p class="panel-description">How many records contain each optional field.</p>
+        <div id="coverage" class="coverage"></div>
+        <div class="quality-footer"><div><span class="muted">Mean collection delay</span><strong id="delay">—</strong></div><div><span class="muted">Repeated result timestamps</span><strong id="repeated">—</strong></div></div>
+        <p class="small-note">Timestamp repetitions count extra rows within a source. Field coverage is not a data quality score.</p>
+      </section>
+      <section class="panel window-panel" aria-labelledby="window-title">
+        <div class="panel-heading"><div><span class="eyebrow">CURRENT SELECTION</span><h2 id="window-title">Observation window</h2></div><button id="download" class="button secondary small" type="button" disabled>Download JSON ↓</button></div>
+        <dl class="window-details"><div><dt>First completed round · UTC</dt><dd id="first">—</dd></div><div><dt>Last completed round · UTC</dt><dd id="last">—</dd></div><div><dt>Sources represented</dt><dd id="source-count">—</dd></div></dl>
+        <p class="small-note">The download contains this displayed aggregate report, including its filters. It contains no raw round payloads.</p>
+      </section>
+      <section id="project-status" class="panel status-panel">
+        <div class="panel-heading"><div><span class="eyebrow">PHASE 05</span><h2>Project status</h2></div><span id="environment" class="panel-tag">—</span></div>
+        <dl class="status-list"><div><dt>Database connection</dt><dd id="database-state" class="status-neutral">Checking</dd></div><div><dt>Local JSON import</dt><dd>Available via CLI</dd></div><div><dt>Live collection</dt><dd class="status-neutral">Not connected</dd></div><div><dt>Prediction engine</dt><dd class="status-neutral">Not implemented</dd></div></dl>
+        <p class="small-note">This dashboard reads stored history. Data imports remain an explicit command-line action.</p>
+      </section>
+    </div>
+    <footer class="page-footer"><span>AIE · Phase 5 · Local research dashboard</span><span>No live connection · No predictions</span></footer>
+  </main>
+</body>
+</html>

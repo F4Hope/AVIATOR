@@ -1,4 +1,4 @@
-"""Phase 4 CLI for descriptive analysis and optional aggregate JSON export."""
+"""CLI for descriptive analysis and optional aggregate JSON export."""
 
 import argparse
 from datetime import datetime
@@ -9,7 +9,7 @@ import sys
 from analysis.descriptive import AnalysisFilters, analyze_database
 from analysis.reporting import decimal_text, write_json_report
 from config.logging_config import configure_logging
-from config.settings import load_settings
+from config.settings import DEVELOPMENT_PHASE, load_settings
 
 
 logger = logging.getLogger("aie.analyze_rounds")
@@ -49,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print(
-        "Aviator Intelligence Engine\nPhase: 4\n"
+        f"Aviator Intelligence Engine\nPhase: {DEVELOPMENT_PHASE}\n"
         f"Analysis: {report.status}\nDatabase rounds: {report.total_stored}\n"
         f"Selected rounds: {report.selected_rounds}\nSources: {report.source_count}"
     )

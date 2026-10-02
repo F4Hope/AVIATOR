@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 
 
 PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
+DEVELOPMENT_PHASE: int = 5
 LOG_LEVELS: tuple[str, ...] = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 ENVIRONMENTS: tuple[str, ...] = ("DEVELOPMENT", "TEST", "PRODUCTION")
 
