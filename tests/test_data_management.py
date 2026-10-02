@@ -405,10 +405,10 @@ def test_export_command_and_backup_command_outputs(settings: Settings, monkeypat
     monkeypatch.setattr(backup_command, "load_settings", lambda: settings)
     assert export_command.main([]) == 0
     output = capsys.readouterr().out
-    assert "Phase: 6\nExport: SAVED" in output and "Rounds exported: 1" in output and "Database changes: NONE" in output
+    assert "Phase: 7\nExport: SAVED" in output and "Rounds exported: 1" in output and "Database changes: NONE" in output
     assert backup_command.main(["--output", "cli.sqlite3"]) == 0
     output = capsys.readouterr().out
-    assert "Phase: 6\nBackup: VERIFIED\nMode: CREATED" in output
+    assert "Phase: 7\nBackup: VERIFIED\nMode: CREATED" in output
     assert "Rounds backed up: 1" in output
     assert backup_command.main(["--verify", "cli.sqlite3"]) == 0
     assert "Mode: VERIFY_ONLY" in capsys.readouterr().out
@@ -434,7 +434,7 @@ def test_real_commands_work_outside_project_working_directory(tmp_path: Path) ->
     for script, arguments in (("main.py", []), ("export_rounds.py", []), ("backup_database.py", ["--output", "outside.sqlite3"]), ("backup_database.py", ["--verify", "outside.sqlite3"])):
         result = subprocess.run([sys.executable, str(project / script), *arguments], cwd=tmp_path, env=environment, text=True, capture_output=True, timeout=10)
         assert result.returncode == 0, result.stderr
-        assert "Phase: 6" in result.stdout
+        assert "Phase: 7" in result.stdout
     assert (project / "data/processed/rounds-export.json").is_file()
     assert (project / "data/database/backups/outside.sqlite3").is_file()
     assert not (tmp_path / "data").exists()
