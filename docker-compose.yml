@@ -1,0 +1,81 @@
+services:
+  aie:
+    build: .
+    command:
+      - python
+      - run_dashboard.py
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --public-host
+      - ${AIE_APP_DOMAIN}
+    environment:
+      AIE_ENVIRONMENT: PRODUCTION
+      AIE_LOG_LEVEL: ${AIE_LOG_LEVEL:-INFO}
+      AIE_DATABASE_FILENAME: ${AIE_DATABASE_FILENAME:-aie.sqlite3}
+    volumes:
+      - aie_data:/app/data
+    restart: unless-stopped
+    depends_on:
+      browserless:
+        condition: service_started
+
+  collector:
+    build: .
+    profiles: ["collector"]
+    command: ["python", "probe_aviator.py"]
+    environment:
+      AIE_ENVIRONMENT: PRODUCTION
+      AIE_LOG_LEVEL: ${AIE_LOG_LEVEL:-INFO}
+      AIE_DATABASE_FILENAME: ${AIE_DATABASE_FILENAME:-aie.sqlite3}
+      AIE_BROWSERLESS_WS_URL: ws://browserless:3000
+      AIE_BROWSERLESS_TOKEN: ${AIE_BROWSERLESS_TOKEN}
+      AIE_BETPAWA_AVIATOR_URL: ${AIE_BETPAWA_AVIATOR_URL}
+    volumes:
+      - aie_data:/app/data
+    restart: unless-stopped
+    depends_on:
+      browserless:
+        condition: service_started
+
+  browserless:
+    image: ghcr.io/browserless/chromium:latest
+    environment:
+      TOKEN: ${AIE_BROWSERLESS_TOKEN}
+      CONCURRENT: "2"
+      QUEUED: "2"
+      TIMEOUT: "-1"
+      DATA_DIR: /data
+      HEALTH: "true"
+      MAX_CPU_PERCENT: "85"
+      MAX_MEMORY_PERCENT: "85"
+    shm_size: "2gb"
+    volumes:
+      - browser_data:/data
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    environment:
+      AIE_APP_DOMAIN: ${AIE_APP_DOMAIN}
+      AIE_BROWSER_DOMAIN: ${AIE_BROWSER_DOMAIN}
+      AIE_BASIC_AUTH_USER: ${AIE_BASIC_AUTH_USER}
+      AIE_BASIC_AUTH_HASH: ${AIE_BASIC_AUTH_HASH}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+    depends_on:
+      - aie
+      - browserless
+
+volumes:
+  aie_data:
+  browser_data:
+  caddy_data:
+  caddy_config:
