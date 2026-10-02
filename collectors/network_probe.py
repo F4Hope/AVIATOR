@@ -1,0 +1,132 @@
+"""Sanitized network-observation primitives for authenticated browser discovery."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import UTC, datetime
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlsplit, urlunsplit
+
+
+MAX_PROBE_BYTES = 10 * 1024 * 1024
+MAX_JSON_PATHS = 200
+MAX_DEPTH = 8
+SENSITIVE_KEY_PARTS = (
+    "password", "passwd", "authorization", "cookie", "token", "secret",
+    "session", "credential", "apikey", "api_key",
+)
+
+
+def safe_url(value: str) -> str:
+    """Strip query strings and fragments so tokens cannot be persisted in URLs."""
+    parsed = urlsplit(value)
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+
+
+def _sensitive_key(key: str) -> bool:
+    normalized = "".join(character.lower() for character in key if character.isalnum() or character == "_")
+    return any(part.replace("_", "") in normalized.replace("_", "") for part in SENSITIVE_KEY_PARTS)
+
+
+def json_shape(value: Any) -> tuple[dict[str, str], ...]:
+    """Return JSON key paths and value types without preserving payload values."""
+    paths: list[dict[str, str]] = []
+
+    def visit(item: Any, path: str, depth: int) -> None:
+        if len(paths) >= MAX_JSON_PATHS or depth > MAX_DEPTH:
+            return
+        if isinstance(item, dict):
+            for key, child in item.items():
+                if not isinstance(key, str) or _sensitive_key(key):
+                    continue
+                child_path = f"{path}.{key}" if path else key
+                paths.append({"path": child_path, "type": type_name(child)})
+                visit(child, child_path, depth + 1)
+        elif isinstance(item, list) and item:
+            child_path = f"{path}[]" if path else "[]"
+            paths.append({"path": child_path, "type": type_name(item[0])})
+            visit(item[0], child_path, depth + 1)
+
+    visit(value, "", 0)
+    return tuple(paths)
+
+
+def type_name(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, list):
+        return "array"
+    return "unknown"
+
+
+def payload_metadata(payload: str | bytes) -> dict[str, object]:
+    """Fingerprint a frame and expose JSON structure only; never raw values."""
+    raw = payload.encode("utf-8", errors="replace") if isinstance(payload, str) else bytes(payload)
+    result: dict[str, object] = {
+        "bytes": len(raw),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "format": "binary" if isinstance(payload, bytes) else "text",
+    }
+    if isinstance(payload, str):
+        try:
+            parsed = json.loads(payload)
+        except (json.JSONDecodeError, ValueError):
+            return result
+        result["format"] = "json"
+        result["root_type"] = type_name(parsed)
+        result["shape"] = list(json_shape(parsed))
+    return result
+
+
+@dataclass(slots=True)
+class ProbeWriter:
+    """Append bounded, sanitized JSONL observations under data/raw."""
+
+    path: Path
+    max_bytes: int = MAX_PROBE_BYTES
+
+    def append(self, event: dict[str, object]) -> bool:
+        if type(self.max_bytes) is not int or self.max_bytes < 1:
+            raise ValueError("max_bytes must be a positive integer.")
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if self.path.exists() and self.path.stat().st_size >= self.max_bytes:
+            return False
+        document = {
+            "observed_at": datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z"),
+            **event,
+        }
+        line = (json.dumps(document, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
+        if self.path.exists() and self.path.stat().st_size + len(line) > self.max_bytes:
+            return False
+        with self.path.open("ab") as handle:
+            handle.write(line)
+            handle.flush()
+        return True
+
+
+def read_recent_probe_events(path: Path, limit: int = 100) -> list[dict[str, object]]:
+    if type(limit) is not int or not 1 <= limit <= 500:
+        raise ValueError("limit must be between 1 and 500.")
+    if not path.is_file():
+        return []
+    lines = path.read_text(encoding="utf-8").splitlines()[-limit:]
+    result: list[dict[str, object]] = []
+    for line in lines:
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            result.append(value)
+    return result
