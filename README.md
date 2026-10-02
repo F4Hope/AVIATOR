@@ -641,20 +641,42 @@ blind-test locking, automated retraining, or wagering.
 Phase 9 adds the infrastructure required to link an authenticated BetPawa
 browser session without putting BetPawa credentials into AIE.
 
-The hosted Docker stack contains:
+Phase 9 now supports two deployment modes.
 
-- AIE dashboard and SQLite data on a persistent volume;
-- Browserless Chromium with a persistent browser-data volume;
-- Caddy HTTPS reverse proxy with Basic Auth;
-- an optional Playwright collector profile for sanitized network discovery.
+**Recommended no-card mode: Windows host + Tailscale**
 
-The public Browserless site is protected twice: Caddy Basic Auth protects the
-browser UI, and Browserless uses a separate random API token. Caddy injects that
-token server-side, so it does not need to appear in the public browser URL.
+- one Windows PC runs Docker Desktop continuously;
+- AIE dashboard and SQLite data use persistent Docker volumes;
+- Browserless Chromium uses a persistent browser-data volume;
+- Tailscale Serve exposes the dashboard privately over HTTPS on the tailnet;
+- a second private Tailscale HTTPS endpoint exposes the Browserless UI;
+- remote Windows/macOS/Linux computers and Android/iPhone devices need only
+  Tailscale plus a normal web browser.
 
-The user logs into BetPawa manually inside the server-side browser. AIE does not
-store or request the BetPawa password/PIN. Browser cookies and local storage
-remain in the Browserless volume rather than the Git repository.
+The free Windows/Tailscale stack binds its local web ports only to
+`127.0.0.1`. It uses Tailscale Serve, not public Tailscale Funnel, so services
+remain private to authorized tailnet devices. The setup script generates the
+Browserless token locally and stores it in ignored `.env.tailscale`.
+
+Run the Windows setup from PowerShell:
+
+```powershell
+.\deploy\windows\setup-aie.ps1
+```
+
+See `deploy/windows/README.md` for first-time installation, phone/laptop
+access, updates, status, collector controls, stopping, and persistent-data
+handling.
+
+**Optional VPS mode**
+
+The existing Docker/Caddy deployment remains available for a paid always-on
+Linux VPS with public DNS and HTTPS. See `deploy/README.md`.
+
+In either mode, the user logs into BetPawa manually inside the persistent
+Browserless session. AIE does not store or request the BetPawa password/PIN.
+Browser cookies and local storage remain in the Browserless volume rather than
+the Git repository.
 
 Start sanitized discovery only after manual login:
 
@@ -679,8 +701,8 @@ actual observable completed-round event and bind an explicit parser for
 `BETPAWA_CM_AVIATOR`. Until that is verified, the dashboard reports live
 collection as discovery-only rather than connected.
 
-For the always-on VPS procedure, DNS/HTTPS setup, manual browser login, Docker
-commands, persistent volumes, and backups, see `deploy/README.md`.
+For the free no-card Windows procedure, see `deploy/windows/README.md`.
+For the optional VPS procedure, see `deploy/README.md`.
 
 ## Database migration and preservation
 
