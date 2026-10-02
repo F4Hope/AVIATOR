@@ -52,7 +52,7 @@ def dashboard_metadata(settings: Settings) -> dict[str, object]:
         "phase": DEVELOPMENT_PHASE, "environment": settings.environment,
         "database": "READY", "schema_version": version,
         "sources": sources, "source_suggestions_truncated": len(source_rows) > MAX_SOURCE_SUGGESTIONS,
-        "live_collection": "NOT_CONNECTED", "prediction_engine": "ML_EXPERIMENTS_AVAILABLE",
+        "live_collection": "DISCOVERY_PROBE_AVAILABLE", "prediction_engine": "ML_EXPERIMENTS_AVAILABLE",
     }
 
 
