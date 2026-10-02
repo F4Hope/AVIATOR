@@ -143,7 +143,7 @@ def test_main_success_output(
     assert application.main() == 0
     assert capsys.readouterr().out == (
         "Aviator Intelligence Engine\n"
-        "Phase: 6\nStatus: INITIALIZED\nDatabase: READY\n"
+        "Phase: 7\nStatus: INITIALIZED\nDatabase: READY\n"
         "Schema version: 1\nRounds stored: 0\nEnvironment: DEVELOPMENT\n"
     )
 
@@ -182,7 +182,7 @@ def test_cli_startup_from_another_directory(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert result.stdout == (
         "Aviator Intelligence Engine\n"
-        "Phase: 6\nStatus: INITIALIZED\nDatabase: READY\n"
+        "Phase: 7\nStatus: INITIALIZED\nDatabase: READY\n"
         "Schema version: 1\nRounds stored: 0\nEnvironment: DEVELOPMENT\n"
     )
     assert (project / "data" / "database" / "aie.sqlite3").is_file()
