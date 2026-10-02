@@ -369,7 +369,7 @@ def test_cli_empty_analysis_and_export(settings: Settings, monkeypatch: pytest.M
     monkeypatch.setattr(command, "load_settings", lambda: settings)
     assert command.main(["--output", "analysis.json"]) == 0
     output = capsys.readouterr().out
-    assert "Phase: 6\nAnalysis: NO_DATA\nDatabase rounds: 0\nSelected rounds: 0" in output
+    assert "Phase: 7\nAnalysis: NO_DATA\nDatabase rounds: 0\nSelected rounds: 0" in output
     assert "Report: SAVED" in output
     assert (settings.processed_data_dir / "analysis.json").is_file()
 
