@@ -30,3 +30,27 @@ jobs:
           AIE_BROWSERLESS_TOKEN: synthetic-browser-token
           AIE_BETPAWA_AVIATOR_URL: https://example.test/aviator
         run: docker compose config --quiet
+      - name: Validate Tailscale Docker Compose
+        env:
+          AIE_TAILSCALE_HOST: host.example-tailnet.ts.net
+          AIE_BROWSERLESS_TOKEN: synthetic-browser-token
+          AIE_BETPAWA_AVIATOR_URL: https://example.test/aviator
+        run: docker compose --env-file deploy/tailscale.env.example -f docker-compose.tailscale.yml config --quiet
+      - name: Parse Windows PowerShell deployment scripts
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem deploy/windows/*.ps1 | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName,
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              $failed = $true
+              Write-Error "$($_.Name): $($errors | Out-String)"
+            }
+          }
+          if ($failed) { exit 1 }

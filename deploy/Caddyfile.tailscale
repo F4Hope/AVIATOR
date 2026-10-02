@@ -1,0 +1,6 @@
+:8081 {
+    # Browserless requires its API token. Inject it locally so users never need
+    # to put the token in a Tailscale URL or bookmark.
+    uri query token {$AIE_BROWSERLESS_TOKEN}
+    reverse_proxy browserless:3000
+}
