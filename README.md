@@ -4,12 +4,14 @@ AIE is a staged research project for investigating whether legitimately availabl
 pre-round information contains useful predictive information. The project does
 not assume that exact prediction is possible.
 
-**Current development phase: Phase 2 — Validated round storage.**
+**Current development phase: Phase 3 — Controlled local JSON import.**
 
 Phase 1 supplied configuration, logging, project directories, and SQLite
-connections. Phase 2 adds a completed-round model, a versioned schema, and an
-append-only repository. **It does not collect Aviator data or make predictions.**
-Startup creates an empty schema, never sample rounds.
+connections. Phase 2 added a completed-round model, a versioned schema, and an
+append-only repository. Phase 3 imports explicitly supplied local JSON files
+after validation, with dry runs and atomic batch storage. **It does not connect
+to Aviator services, collect live data, or make predictions.** Startup never
+inserts sample rounds or imports files automatically.
 
 ## Requirements
 
@@ -19,7 +21,7 @@ Startup creates an empty schema, never sample rounds.
 
 Only two third-party packages are needed: `python-dotenv` for configuration and
 `pytest` for tests. SQLite, pathlib, logging, typing, datetime, JSON, and Decimal
-come with Python. Phase 2 adds no dependencies.
+come with Python. Phase 3 adds no dependencies.
 
 ## GitHub Codespaces, Linux, or macOS installation
 
@@ -38,7 +40,7 @@ cp .env.example .env
 The version must be Python 3.12 or newer. In VS Code, use **Python: Select
 Interpreter** and choose the interpreter inside `.venv`.
 
-For an existing Phase 1 installation, keep your `.env`, database, and virtual
+For an existing Phase 1 or Phase 2 installation, keep your `.env`, database, and virtual
 environment. After updating the source files, run:
 
 ```bash
@@ -114,7 +116,7 @@ Expected standard output on a fresh database with default settings:
 
 ```text
 Aviator Intelligence Engine
-Phase: 2
+Phase: 3
 Status: INITIALIZED
 Database: READY
 Schema version: 1
@@ -122,10 +124,94 @@ Rounds stored: 0
 Environment: DEVELOPMENT
 ```
 
-The count reflects stored records on later runs. **Development phase 2 uses
-database schema version 1**: this is the first application schema, since
-Phase 1 had no tables. Startup checks SQLite, initializes or verifies the schema,
-reports the count, and closes its connection.
+The count reflects stored records on later runs. **Development phase 3 keeps
+database schema version 1**, introduced in Phase 2. Existing Phase 2 records
+are preserved. Startup checks SQLite, initializes or verifies the schema,
+reports the count, and closes its connection. It does not import data.
+
+## Phase 3: import a local JSON file
+
+Phase 3 supplies an AIE file format and an explicit import command. It accepts
+completed-round records from a local file supplied by the user. This is an
+internal application format; no external provider's export format or API is
+assumed. Map an authorized export into it using accurate source information.
+Do not guess missing IDs, timestamps, results, or observation times.
+
+The repository includes `examples/rounds.empty.json`, containing no game data:
+
+```json
+{
+  "format_version": 1,
+  "rounds": []
+}
+```
+
+Validate this empty template without opening or changing the database:
+
+```bash
+python import_rounds.py examples/rounds.empty.json --dry-run
+```
+
+Expected output begins:
+
+```text
+Aviator Intelligence Engine
+Phase: 3
+Import: VALIDATED
+Rows validated: 0
+Database check: NOT RUN
+Database changes: NONE
+```
+
+An `Input SHA256` line identifies the exact input bytes. This fingerprint is
+not proof that the source data is genuine and does not verify a game's result.
+
+Place your actual input file at `data/raw/rounds.json` or another local path.
+Each object in the `rounds` array must supply these five fields:
+
+| Field | JSON type and requirement |
+| --- | --- |
+| `source` | Nonempty string identifying the actual source |
+| `round_id` | Nonempty string containing the source's round identifier |
+| `timestamp` | ISO 8601 string with a timezone, describing result completion |
+| `collection_timestamp` | ISO 8601 string with a timezone, at or after result completion |
+| `multiplier` | Decimal **string**, finite and at least 1; JSON numbers are rejected here |
+
+Optional fields are `started_at`, `pre_round_observed_at`, `pre_round_data`,
+`post_round_data`, and `raw_data`, as defined in the round model below. Optional
+times may be omitted or `null`. Payloads must be JSON objects. Unknown fields
+are rejected, so do not include database-assigned `id` or `ingested_at` fields.
+
+Input must be UTF-8 JSON, optionally with a UTF-8 BOM, with a `.json` extension.
+The top-level object must contain exactly `format_version` (integer 1) and
+`rounds` (an array). Limits are **10 MiB per file** and **10,000 records**.
+Duplicate object keys, nonfinite JSON numbers, invalid timestamps, unsupported
+versions, and invalid records are rejected before opening the database.
+Use strings for precision-sensitive payload values: ordinary JSON payload
+numbers are decoded into Python numeric types, which may lose decimal precision.
+The original input file is left unchanged; it is not automatically copied or archived.
+
+Validate a real file first, then explicitly import it:
+
+```bash
+python import_rounds.py data/raw/rounds.json --dry-run
+python import_rounds.py data/raw/rounds.json
+```
+
+Dry runs check file format and record values only. They do not query the
+database or check duplicate identities, including conflicts within a file.
+Passing a dry run therefore does not guarantee that the database will accept
+the import. Real imports initialize or verify the schema, then insert the whole
+batch in one transaction. Exact replays are skipped and counted. A conflicting
+duplicate or failed insert rolls back every new round in that batch; existing
+records remain unchanged. An empty import adds zero rounds.
+
+Successful imports print `Rows read`, `Inserted`, `Duplicates`, and the input
+fingerprint. Diagnostics print fixed error codes and, where applicable, a
+1-based round number; they do not echo file paths, source identifiers, or payload
+values. No persistent import-report table or report file is created in this
+phase. The command returns 0 on success, 1 on an import failure, and 2 for an
+invalid command-line usage. Use `python import_rounds.py --help` for usage.
 
 ## Database migration and preservation
 
@@ -176,7 +262,7 @@ back to `Decimal` rather than sort it as text.
 Pre-round timestamps are caller-supplied assertions. Validation does not prove
 live observation or detect information concealed in an arbitrary payload.
 A future collector must establish provenance and exclude post-round information
-from pre-round inputs. Phase 2 saves completed records only; it does not capture
+from pre-round inputs. Phase 3 saves completed records only; it does not capture
 pre-round events in real time.
 
 ## Repository interface
@@ -189,6 +275,7 @@ with `contextlib.closing`. SQLite's own context manager does not close it.
 | Method | Behavior |
 | --- | --- |
 | `insert(record)` | `True` for a new record; `False` for an exact replay |
+| `insert_many(records)` | Atomically inserts a batch and returns inserted/duplicate counts |
 | `get(source, round_id)` | Returns a `StoredRound`, or `None` |
 | `count(source=None)` | Counts all records or one source |
 | `list_rounds(...)` | Returns records oldest first, with pagination and optional source/time filters |
@@ -198,6 +285,9 @@ An existing `(source, round_id)` with any different stored field raises
 original record, ID, and ingestion time are retained. Equivalent decimal
 formatting and JSON key ordering are normalized for replay comparison.
 There is no silent correction, replacement, or deletion API in this phase.
+`insert_many` validates and serializes all supplied records before starting the
+transaction, and rolls back the entire batch on a conflicting record or SQL
+failure. `insert` uses the same implementation for a single record.
 
 `list_rounds` orders by result timestamp, then source and round ID for stable
 ties. It accepts `limit` (default 100, maximum 10000), `offset`, `source`,
@@ -222,36 +312,39 @@ Or explicitly use the selected interpreter:
 python -m pytest
 ```
 
-The suite retains the 25 Phase 1 checks and adds 67 Phase 2 cases. It covers
+The suite retains the 25 Phase 1 checks and 67 Phase 2 cases, adding 60 Phase 3
+cases. It covers
 configuration, logging, directories, startup, migration rollback and version
 checks, validation, exact decimal/JSON persistence, chronological queries,
-duplicate conflicts, concurrent inserts, and preservation across restarts.
+duplicate conflicts, concurrent inserts, and preservation across restarts,
+plus file parsing, import limits, dry runs, batch rollback, and import CLI behavior.
 Database-writing tests use temporary directories. Synthetic records are labeled
 as test fixtures and never inserted into the application database by the suite
 or startup.
 
-Phase 2 validation: **92 tests passed on each of Python 3.12.14 and 3.14.2**
-on Linux, using `python-dotenv` **1.2.4** and `pytest` **9.1.1**. Fresh and
-repeated startup succeeded with zero rounds. A native Windows run has not
-been verified here.
+Phase 2 checkpoint: 92 tests passed on Python 3.12.14 and 3.14.2; the user's
+Codespace also passed those 92 tests on Python 3.14.2. Phase 3 validation:
+**152 tests passed on each of Python 3.12.14 and 3.14.2** on Linux, using
+`python-dotenv` **1.2.4** and `pytest` **9.1.1**. Startup and empty-template
+validation succeeded with zero rounds. A native Windows run has not been verified.
 
-## Phase 2 source changes
+## Phase 3 source changes
 
 | File | Change |
 | --- | --- |
-| `database/models.py` | New validated, immutable record classes |
-| `database/migrations.py` | New transactional schema initialization |
-| `database/repository.py` | New round insertion and retrieval interface |
-| `database/database.py` | Explicit transaction configuration and row access |
-| `database/__init__.py` | Updated package description |
-| `main.py` | Schema initialization and round-count startup status |
-| `tests/conftest.py` | Shared configuration and database isolation |
-| `tests/test_database.py` | New Phase 2 tests |
-| `tests/test_setup.py` | Existing checks adapted to Phase 2 startup |
+| `collectors/json_importer.py` | New bounded JSON validation and explicit import workflow |
+| `collectors/__init__.py` | Updated package description |
+| `import_rounds.py` | New import command with dry-run support and safe diagnostics |
+| `examples/rounds.empty.json` | New empty template, containing no game data |
+| `database/repository.py` | Atomic batch inserts retaining Phase 2 duplicate behavior |
+| `main.py` | Phase 3 startup status |
+| `tests/test_importer.py` | New Phase 3 tests |
+| `tests/test_setup.py` | Existing checks adapted to Phase 3 startup |
 | `README.md` | Updated installation, usage, and limitations |
 
 Configuration, directories, `.env.example`, `.gitignore`, and requirements
-remain compatible with Phase 1. Other feature packages remain placeholders.
+remain compatible with Phase 2. Database schema version remains 1. Other
+feature packages remain placeholders.
 
 ## Git and current limitations
 
@@ -264,16 +357,16 @@ After reviewing and testing a source update in your own checkout:
 
 ```bash
 git status
-git add README.md main.py database tests
-git commit -m "Implement AIE Phase 2 round storage"
+git add README.md main.py import_rounds.py collectors database tests examples
+git commit -m "Implement AIE Phase 3 local JSON import"
 git push
 ```
 
 Current limitations:
 
 - No BetPawa connection, login, credentials, browser automation, scraper, or API integration.
-- No real or historical Aviator data collection and no user-facing import command.
+- No automatic acquisition of real or historical Aviator data; imports require a supplied local file.
 - No cryptographic verifier, statistical analysis, prediction engine, or ML models.
 - No prediction accuracy claims, dashboard implementation, betting features, or transactions.
 
-Development stops at Phase 2. Phase 3 requires a separate instruction.
+Development stops at Phase 3. Phase 4 requires a separate instruction.

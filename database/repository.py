@@ -1,9 +1,11 @@
 """Parameterized, append-only persistence for validated completed rounds."""
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 import json
 import logging
 import sqlite3
+from typing import Iterable
 
 from database.models import RoundRecord, StoredRound, identifier, json_text, timestamp_text
 
@@ -17,6 +19,14 @@ RECORD_COLUMNS = (
 
 class DuplicateRoundError(ValueError):
     """The same source and round ID already have a different stored record."""
+
+
+@dataclass(frozen=True, slots=True)
+class BatchInsertResult:
+    """Counts from a successfully committed batch, including exact replays."""
+
+    inserted: int
+    duplicates: int
 
 
 def _record_values(record: RoundRecord) -> tuple[object, ...]:
@@ -59,37 +69,52 @@ class RoundRepository:
         A repeat collected at a different time is a distinct observation and
         must not silently replace the original completed-round record.
         """
-        if not isinstance(record, RoundRecord):
-            raise TypeError("insert requires a validated RoundRecord.")
-        values = _record_values(record)
+        return self.insert_many((record,)).inserted == 1
+
+    def insert_many(self, records: Iterable[RoundRecord]) -> BatchInsertResult:
+        """Commit a whole batch or roll it back if any record conflicts.
+
+        Validate and serialize the iterable before opening a transaction. An
+        invalid item or failed iterator therefore cannot leave partial writes.
+        Repeated identical records within the batch are counted as replays.
+        """
         if self.connection.in_transaction:
             raise RuntimeError("Round insertion requires an idle connection.")
+        prepared: list[tuple[object, ...]] = []
+        for record in records:
+            if not isinstance(record, RoundRecord):
+                raise TypeError("insert requires a validated RoundRecord.")
+            prepared.append(_record_values(record))
+        if not prepared:
+            return BatchInsertResult(0, 0)
+
         self.connection.execute("BEGIN IMMEDIATE")
+        inserted = duplicates = 0
         try:
-            existing = self.connection.execute(
-                "SELECT * FROM rounds WHERE source = ? AND round_id = ?",
-                (record.source, record.round_id),
-            ).fetchone()
-            if existing is not None:
-                if tuple(existing[column] for column in RECORD_COLUMNS) != values:
-                    raise DuplicateRoundError("A conflicting record exists for this source and round ID.")
-                self.connection.commit()
-                logger.debug("Exact round replay ignored.")
-                return False
-            self.connection.execute(
-                """INSERT INTO rounds (
-                    source, round_id, timestamp, multiplier, collection_timestamp,
-                    started_at, pre_round_observed_at, pre_round_data, post_round_data,
-                    raw_data, ingested_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (*values, timestamp_text(datetime.now(UTC))),
-            )
+            for values in prepared:
+                existing = self.connection.execute(
+                    "SELECT * FROM rounds WHERE source = ? AND round_id = ?", values[:2],
+                ).fetchone()
+                if existing is not None:
+                    if tuple(existing[column] for column in RECORD_COLUMNS) != values:
+                        raise DuplicateRoundError("A conflicting record exists for this source and round ID.")
+                    duplicates += 1
+                    continue
+                self.connection.execute(
+                    """INSERT INTO rounds (
+                        source, round_id, timestamp, multiplier, collection_timestamp,
+                        started_at, pre_round_observed_at, pre_round_data, post_round_data,
+                        raw_data, ingested_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (*values, timestamp_text(datetime.now(UTC))),
+                )
+                inserted += 1
             self.connection.commit()
         except BaseException:
             self.connection.rollback()
             raise
-        logger.debug("Completed round stored.")
-        return True
+        logger.debug("Round batch committed: %s inserted, %s duplicates.", inserted, duplicates)
+        return BatchInsertResult(inserted, duplicates)
 
     def get(self, source: str, round_id: str) -> StoredRound | None:
         """Retrieve one round using its source-scoped identity."""
