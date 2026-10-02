@@ -42,3 +42,20 @@ def test_tailscale_environment_template_contains_no_real_secret() -> None:
     content = (ROOT / "deploy/tailscale.env.example").read_text(encoding="utf-8")
     assert "replace-with-a-long-random-token" in content
     assert "AIE_TAILSCALE_HOST=replace-with-device.tailnet-name.ts.net" in content
+
+
+
+def test_windows_bootstrap_installs_expected_prerequisites() -> None:
+    content = (ROOT / "deploy/windows/bootstrap-host.ps1").read_text(encoding="utf-8")
+    assert 'WingetId "Git.Git"' in content
+    assert 'WingetId "Docker.DockerDesktop"' in content
+    assert 'WingetId "Tailscale.Tailscale"' in content
+    assert "Start-Process powershell.exe -Verb RunAs" in content
+    assert ".\deploy\windows\setup-aie.ps1" in content
+
+
+def test_windows_bootstrap_never_embeds_account_secrets() -> None:
+    content = (ROOT / "deploy/windows/bootstrap-host.ps1").read_text(encoding="utf-8").lower()
+    assert "password=" not in content
+    assert "betpawa_pin" not in content
+    assert "api_token=" not in content
