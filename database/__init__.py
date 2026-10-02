@@ -1,1 +1,1 @@
-"""SQLite connection infrastructure; schema belongs to Phase 2."""
+"""Phase 2 SQLite connections, validated round records, and persistence."""

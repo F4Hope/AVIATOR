@@ -8,7 +8,6 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-from typing import Iterator
 
 import pytest
 
@@ -16,37 +15,6 @@ from config.logging_config import configure_logging
 from config.settings import PROJECT_ROOT, LOG_LEVELS, Settings, ensure_directories, load_settings
 from database.database import connect_database
 import main as application
-
-
-@pytest.fixture(autouse=True)
-def isolated_configuration(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Keep local .env values and logging handlers from leaking between tests."""
-    for key in (
-        "AIE_ENVIRONMENT", "AIE_LOG_LEVEL", "AIE_DATABASE_FILENAME", "PYTHON_DOTENV_DISABLED"
-    ):
-        # setenv registers an undo even if load_dotenv later inserts the variable.
-        monkeypatch.setenv(key, "")
-        monkeypatch.delenv(key)
-
-    logger = logging.getLogger("aie")
-    original_handlers = logger.handlers[:]
-    original_level = logger.level
-    original_propagation = logger.propagate
-    logger.handlers = []
-    try:
-        yield
-    finally:
-        for handler in logger.handlers:
-            handler.close()
-        logger.handlers = original_handlers
-        logger.setLevel(original_level)
-        logger.propagate = original_propagation
-
-
-@pytest.fixture
-def settings(tmp_path: Path) -> Settings:
-    """Resolve settings into a temporary project, never the user's database."""
-    return load_settings(project_root=tmp_path)
 
 
 def test_configuration_defaults(settings: Settings, tmp_path: Path) -> None:
@@ -138,7 +106,10 @@ def test_application_initialization_closes_connection(
 
     monkeypatch.setattr(application, "load_settings", lambda: settings)
     monkeypatch.setattr(application, "connect_database", open_connection)
-    assert application.initialize_application() == settings
+    state = application.initialize_application()
+    assert state.settings == settings
+    assert state.schema_version == 1
+    assert state.rounds_stored == 0
     assert settings.database_path.is_file()
     assert all(path.is_dir() for path in settings.required_directories)
     assert len(connections) == 1
@@ -172,7 +143,8 @@ def test_main_success_output(
     assert application.main() == 0
     assert capsys.readouterr().out == (
         "Aviator Intelligence Engine\n"
-        "Status: INITIALIZED\nDatabase: READY\nEnvironment: DEVELOPMENT\n"
+        "Phase: 2\nStatus: INITIALIZED\nDatabase: READY\n"
+        "Schema version: 1\nRounds stored: 0\nEnvironment: DEVELOPMENT\n"
     )
 
 
@@ -210,7 +182,8 @@ def test_cli_startup_from_another_directory(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert result.stdout == (
         "Aviator Intelligence Engine\n"
-        "Status: INITIALIZED\nDatabase: READY\nEnvironment: DEVELOPMENT\n"
+        "Phase: 2\nStatus: INITIALIZED\nDatabase: READY\n"
+        "Schema version: 1\nRounds stored: 0\nEnvironment: DEVELOPMENT\n"
     )
     assert (project / "data" / "database" / "aie.sqlite3").is_file()
     assert not (tmp_path / "data").exists()

@@ -16,7 +16,10 @@ def connect_database(settings: Settings) -> sqlite3.Connection:
     contextlib.closing. SQLite's own context manager does not close connections.
     """
     settings.database_dir.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(settings.database_path, timeout=5.0)
+    connection = sqlite3.connect(
+        settings.database_path, timeout=5.0, isolation_level=None,
+        autocommit=sqlite3.LEGACY_TRANSACTION_CONTROL,
+    )
     try:
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
