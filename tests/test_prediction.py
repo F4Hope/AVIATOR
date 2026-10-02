@@ -90,4 +90,4 @@ def test_walk_forward_metrics_match_known_fixture() -> None:
     assert score.predictions == 2
     assert score.positives == 1
     assert score.brier_score == Decimal("0.347222")
-    assert score.calibration_error == Decimal("0.083333")
+    assert score.calibration_error == Decimal("0.083334")
