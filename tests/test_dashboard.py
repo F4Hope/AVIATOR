@@ -100,7 +100,7 @@ def test_empty_database_has_real_empty_states(settings: Settings) -> None:
         status, _, body = request(server, "/api/status")
         metadata = json.loads(body)
         assert status == 200 and metadata["sources"] == []
-        assert metadata["phase"] == 6 and metadata["schema_version"] == 1
+        assert metadata["phase"] == 7 and metadata["schema_version"] == 1
         assert metadata["prediction_engine"] == "BASELINE_AVAILABLE"
         assert metadata["live_collection"] == "NOT_CONNECTED"
         status, _, body = request(server, "/api/summary")
