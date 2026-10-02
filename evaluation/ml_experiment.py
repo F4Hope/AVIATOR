@@ -36,6 +36,14 @@ class SplitConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class TestPrediction:
+    target_index: int
+    probability: float
+    baseline_probability: float
+    actual: int
+
+
+@dataclass(frozen=True, slots=True)
 class ThresholdExperiment:
     threshold: Decimal
     status: str
@@ -47,6 +55,7 @@ class ThresholdExperiment:
     test_brier: float | None
     baseline_test_brier: float | None
     test_positive_rate: float | None
+    test_predictions: tuple[TestPrediction, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +134,7 @@ def run_logistic_experiment(
                     threshold, "INSUFFICIENT_CLASS_VARIATION", None,
                     len(x_train), len(x_validation), len(x_test),
                     None, None, None, sum(y_test) / len(y_test) if y_test else None,
+                    (),
                 )
             )
             continue
@@ -152,6 +162,7 @@ def run_logistic_experiment(
                     threshold, "INSUFFICIENT_CLASS_VARIATION", selected_c,
                     len(x_train), len(x_validation), len(x_test),
                     validation_brier, None, None, sum(y_test) / len(y_test) if y_test else None,
+                    (),
                 )
             )
             continue
@@ -171,6 +182,18 @@ def run_logistic_experiment(
             baseline_probabilities.append(float(probability))
         baseline_brier = _brier(y_test, baseline_probabilities)
 
+        test_samples = samples[test_slice]
+        test_predictions = tuple(
+            TestPrediction(
+                target_index=sample.target_index,
+                probability=float(probability),
+                baseline_probability=float(baseline_probability),
+                actual=actual,
+            )
+            for sample, probability, baseline_probability, actual in zip(
+                test_samples, test_probability, baseline_probabilities, y_test
+            )
+        )
         reports.append(
             ThresholdExperiment(
                 threshold=threshold,
@@ -183,6 +206,7 @@ def run_logistic_experiment(
                 test_brier=test_brier,
                 baseline_test_brier=baseline_brier,
                 test_positive_rate=sum(y_test) / len(y_test) if y_test else None,
+                test_predictions=test_predictions,
             )
         )
 
