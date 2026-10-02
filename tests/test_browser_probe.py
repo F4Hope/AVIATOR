@@ -7,6 +7,7 @@ import pytest
 
 from collectors.browser_probe import BrowserProbeConfig
 from collectors.network_probe import ProbeWriter, json_shape, payload_metadata, safe_url
+from collectors.probe_analysis import summarize_probe
 
 
 def test_safe_url_removes_query_and_fragment() -> None:
@@ -85,3 +86,27 @@ def test_browser_probe_config_rejects_unsafe_values(
     values.update(changes)
     with pytest.raises(ValueError):
         BrowserProbeConfig(**values)
+
+
+
+def test_probe_summary_ranks_candidate_paths(tmp_path: Path) -> None:
+    path = tmp_path / "probe.jsonl"
+    writer = ProbeWriter(path, max_bytes=4096)
+    writer.append({
+        "kind": "websocket_received",
+        "url": "wss://example.test/socket",
+        "payload": {
+            "format": "json",
+            "shape": [
+                {"path": "game.round_id", "type": "string"},
+                {"path": "game.multiplier", "type": "number"},
+                {"path": "other", "type": "string"},
+            ],
+        },
+    })
+    result = summarize_probe(path)
+    assert len(result) == 1
+    assert result[0].kind == "websocket_received"
+    assert {path for path, _ in result[0].candidate_paths} == {
+        "game.round_id", "game.multiplier"
+    }
