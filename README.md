@@ -4,7 +4,7 @@ AIE is a staged research project for investigating whether legitimately availabl
 pre-round information contains useful predictive information. The project does
 not assume that exact prediction is possible.
 
-**Current development phase: Phase 6 — Round export and verified local backups.**
+**Current development phase: Phase 7 — Leakage-safe baseline prediction evaluation.**
 
 Phase 1 supplied configuration, logging, project directories, and SQLite
 connections. Phase 2 added a completed-round model, a versioned schema, and an
@@ -15,10 +15,12 @@ Phase 5 presents these summaries in a local browser dashboard with source and
 UTC time filters, metadata coverage, and aggregate downloads.
 Phase 6 exports portable completed-round JSON and creates verified SQLite
 backups. Both operations are explicit local commands and preserve the live
-database.
-**It does not connect to Aviator services, collect live data, make predictions,
-or recommend bets.** Startup never inserts sample rounds or imports files
-automatically.
+database. Phase 7 adds an offline empirical-frequency baseline for multiplier
+thresholds and chronological walk-forward evaluation. It uses only outcomes
+strictly earlier than each replay target.
+**It does not connect to Aviator services, collect live data, make live pre-round
+predictions, or recommend bets.** Startup never inserts sample rounds or imports
+files automatically.
 
 ## Requirements
 
@@ -354,8 +356,8 @@ The interface displays:
 - Optional metadata coverage, mean collection delay, and repeated result timestamps.
 - First/last completion times, represented source count, schema, and environment.
 - Actual project status: local import available, live collection not connected,
-  and prediction engine not implemented.
-  Phase 6 also lists round export and database backups as available via CLI.
+  and an offline baseline evaluation engine available.
+  Round export and database backups remain available via CLI.
 
 Enter an exact source name, or leave it blank for all sources. Suggestions are
 limited to the first 1,000 stored source names; other names can be typed manually.
@@ -548,6 +550,46 @@ The dashboard remains read-only: it lists export and backup availability, but
 file creation is performed only by these command-line actions. Both commands
 return 0 on success, 1 on an operation failure, and 2 for invalid CLI usage.
 
+## Phase 7: baseline prediction evaluation
+
+Phase 7 introduces a deliberately simple empirical-frequency baseline before
+any machine-learning model is attempted. For configurable thresholds (default
+1.5x, 2x, and 5x), the baseline estimates the historical probability that a
+completed multiplier reached or exceeded each threshold.
+
+The baseline supports two modes:
+
+- `expanding`: use every prior completed round in the selected source.
+- `rolling`: use only the most recent configured history window.
+
+A minimum-history requirement prevents probabilities from being reported when
+too little prior data exists. Higher-threshold probabilities are required to be
+no greater than lower-threshold probabilities.
+
+Evaluate one stored source chronologically:
+
+```bash
+python evaluate_baseline.py --source SOURCE_NAME
+```
+
+Example with a rolling window and custom thresholds:
+
+```bash
+python evaluate_baseline.py --source SOURCE_NAME --mode rolling --window 200 --min-history 50 --threshold 1.5 --threshold 2 --threshold 5
+```
+
+Walk-forward evaluation processes targets oldest to newest. For target round
+`i`, its prediction is built only from rounds before `i`; the target result is
+then used only for scoring. The command reports the number of evaluated and
+skipped targets plus Brier score and aggregate calibration error for each
+threshold.
+
+This is an **offline historical baseline**, not a live blind test. It does not
+claim that historical multipliers predict future multipliers, does not lock
+predictions before real future rounds, and does not establish predictive
+advantage. Live prediction timing and blind-test persistence remain later
+development phases.
+
 ## Database migration and preservation
 
 The default file is `data/database/aie.sqlite3`. First startup upgrades an empty
@@ -728,9 +770,9 @@ Current limitations:
 
 - No BetPawa connection, login, credentials, browser automation, scraper, or API integration.
 - No automatic acquisition of real or historical Aviator data; imports require a supplied local file.
-- No cryptographic verifier, inferential hypothesis tests, prediction engine, or ML models.
+- No cryptographic verifier, inferential hypothesis tests, ML models, or live prediction engine; Phase 7 provides only an offline historical-frequency baseline.
 - No prediction accuracy claims, betting features, or transactions.
 - Local development dashboard only; no production deployment or application authentication.
 - Local backups only; no scheduled/offsite backup service or automatic restore.
 
-Development stops at Phase 6. Phase 7 requires a separate instruction.
+Development stops at Phase 7. The next phase requires a separate instruction.
