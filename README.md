@@ -4,14 +4,16 @@ AIE is a staged research project for investigating whether legitimately availabl
 pre-round information contains useful predictive information. The project does
 not assume that exact prediction is possible.
 
-**Current development phase: Phase 3 — Controlled local JSON import.**
+**Current development phase: Phase 4 — Descriptive analysis and reports.**
 
 Phase 1 supplied configuration, logging, project directories, and SQLite
 connections. Phase 2 added a completed-round model, a versioned schema, and an
-append-only repository. Phase 3 imports explicitly supplied local JSON files
-after validation, with dry runs and atomic batch storage. **It does not connect
-to Aviator services, collect live data, or make predictions.** Startup never
-inserts sample rounds or imports files automatically.
+append-only repository. Phase 3 added validated local JSON imports, dry runs,
+and atomic batch storage. Phase 4 summarizes stored historical records from a
+read-only database snapshot and optionally exports an aggregate JSON report.
+**It does not connect to Aviator services, collect live data, make predictions,
+or recommend bets.** Startup never inserts sample rounds or imports files
+automatically.
 
 ## Requirements
 
@@ -21,7 +23,7 @@ inserts sample rounds or imports files automatically.
 
 Only two third-party packages are needed: `python-dotenv` for configuration and
 `pytest` for tests. SQLite, pathlib, logging, typing, datetime, JSON, and Decimal
-come with Python. Phase 3 adds no dependencies.
+come with Python. Phase 4 adds no dependencies.
 
 ## GitHub Codespaces, Linux, or macOS installation
 
@@ -40,8 +42,8 @@ cp .env.example .env
 The version must be Python 3.12 or newer. In VS Code, use **Python: Select
 Interpreter** and choose the interpreter inside `.venv`.
 
-For an existing Phase 1 or Phase 2 installation, keep your `.env`, database, and virtual
-environment. After updating the source files, run:
+For an existing installation, keep your `.env`, database, and virtual environment.
+After updating the source files, run:
 
 ```bash
 source .venv/bin/activate
@@ -116,7 +118,7 @@ Expected standard output on a fresh database with default settings:
 
 ```text
 Aviator Intelligence Engine
-Phase: 3
+Phase: 4
 Status: INITIALIZED
 Database: READY
 Schema version: 1
@@ -124,7 +126,7 @@ Rounds stored: 0
 Environment: DEVELOPMENT
 ```
 
-The count reflects stored records on later runs. **Development phase 3 keeps
+The count reflects stored records on later runs. **Development phase 4 keeps
 database schema version 1**, introduced in Phase 2. Existing Phase 2 records
 are preserved. Startup checks SQLite, initializes or verifies the schema,
 reports the count, and closes its connection. It does not import data.
@@ -156,7 +158,7 @@ Expected output begins:
 
 ```text
 Aviator Intelligence Engine
-Phase: 3
+Phase: 4
 Import: VALIDATED
 Rows validated: 0
 Database check: NOT RUN
@@ -213,6 +215,100 @@ values. No persistent import-report table or report file is created in this
 phase. The command returns 0 on success, 1 on an import failure, and 2 for an
 invalid command-line usage. Use `python import_rounds.py --help` for usage.
 
+## Phase 4: descriptive analysis
+
+Initialize the application first with `python main.py`, then analyze the stored
+records without creating a report file:
+
+```bash
+python analyze_rounds.py
+```
+
+Analyze and save an aggregate JSON report under `data/processed`:
+
+```bash
+python analyze_rounds.py --output analysis.json
+```
+
+For an empty database, this is successful and prints:
+
+```text
+Aviator Intelligence Engine
+Phase: 4
+Analysis: NO_DATA
+Database rounds: 0
+Selected rounds: 0
+Sources: 0
+No rounds matched this selection.
+Report: SAVED
+```
+
+The report is `data/processed/analysis.json`. Unavailable statistics and
+percentages are JSON `null`, not fabricated zero values. Bucket counts are
+zero. A filtered selection can also return `NO_DATA` even when other records
+exist in the database.
+
+Optional `--source`, `--start`, and `--end` arguments restrict the selection.
+The source must match a stored source identifier. Times must be ISO 8601 strings
+with explicit timezones; they are normalized to UTC. `--start` is inclusive and
+`--end` is exclusive. For example:
+
+```bash
+python analyze_rounds.py --start 2026-10-01T00:00:00Z --end 2026-10-02T00:00:00Z
+```
+
+There is no pagination or silent sampling: every selected record is analyzed.
+Selections above **100,000 rounds** are refused; narrow the source or time
+interval. Source names and dates are bound as SQL parameters. Use
+`python analyze_rounds.py --help` for all options.
+
+| Report content | Definition |
+| --- | --- |
+| Counts and scope | Total database records, selected records, selected source count, filters, and UTC generation time |
+| Result range | First and last selected result-completion times |
+| Multiplier summary | Minimum, maximum, median, and mean of selected historical multipliers |
+| Historical buckets | `[1, 2)`, `[2, 5)`, `[5, 10)`, and `[10, infinity)` counts and percentages |
+| Metadata coverage | Counts with known start, pre-round observation time, and nonempty pre/post/raw payloads |
+| Repeated result timestamps | Extra records beyond the first at the same source and result time |
+| Collection delays | Minimum, maximum, median, and mean seconds between result completion and completed-event collection |
+
+Multiplier calculations use `Decimal`, never SQLite floating-point casts or
+text ordering. The arithmetic context uses 600 significant digits, sufficient
+for the supported stored values and selection limit. Extrema and medians retain
+their exact decimal values. Means are rounded to **six decimal places** and
+percentages to **two**, using `ROUND_HALF_EVEN`. JSON stores decimal values as
+strings and trims trailing fractional zeros. Individually rounded percentages
+may not sum to exactly 100. The original stored multipliers remain unchanged.
+
+Analysis opens an existing database in SQLite read-only mode and verifies the
+managed schema without migrating it. Counts and values come from one read
+transaction, so concurrent imports cannot produce a mixed snapshot. Missing,
+uninitialized, or incompatible databases cause a nonzero exit code; analysis
+does not create a database. Invalid selected stored values or timing cause
+failure rather than silent skipping. The checks apply to the selected records.
+Normal application startup retains its existing schema-initialization behavior.
+
+JSON reports contain aggregates and selection metadata, with report version 1
+and database schema version 1. They exclude round IDs, raw payload values,
+cookies, and authentication fields. Publication uses a flushed temporary file
+and an atomic operation in the same directory. Existing reports are preserved
+by default, including a target created concurrently. Choose a new filename or
+explicitly allow replacement:
+
+```bash
+python analyze_rounds.py --output analysis.json --overwrite
+```
+
+`--output` accepts a plain `.json` filename, not a path. `--overwrite` requires
+`--output`. Report export is the only analysis operation that creates files.
+Reports are local generated data and are excluded by `.gitignore`.
+
+Metadata absence is not automatically a data error: these fields are optional.
+Repeated timestamps can reflect limited timestamp precision and do not prove
+duplicate rounds. Observed bucket percentages describe this stored sample;
+they are not forecasts or betting signals. Analysis cannot establish source
+authenticity, prove complete capture, or verify the asserted pre-round timing.
+
 ## Database migration and preservation
 
 The default file is `data/database/aie.sqlite3`. First startup upgrades an empty
@@ -262,7 +358,7 @@ back to `Decimal` rather than sort it as text.
 Pre-round timestamps are caller-supplied assertions. Validation does not prove
 live observation or detect information concealed in an arbitrary payload.
 A future collector must establish provenance and exclude post-round information
-from pre-round inputs. Phase 3 saves completed records only; it does not capture
+from pre-round inputs. AIE saves completed records only; it does not capture
 pre-round events in real time.
 
 ## Repository interface
@@ -312,38 +408,45 @@ Or explicitly use the selected interpreter:
 python -m pytest
 ```
 
-The suite retains the 25 Phase 1 checks and 67 Phase 2 cases, adding 60 Phase 3
-cases. It covers
+The suite retains the 25 Phase 1 checks, 67 Phase 2 cases, and 60 Phase 3 cases,
+and adds 59 Phase 4 cases. It covers
 configuration, logging, directories, startup, migration rollback and version
 checks, validation, exact decimal/JSON persistence, chronological queries,
 duplicate conflicts, concurrent inserts, and preservation across restarts,
 plus file parsing, import limits, dry runs, batch rollback, and import CLI behavior.
+Phase 4 tests cover empty selections, bucket boundaries, high-precision decimals,
+rounding and context isolation, filtering, snapshot consistency during writes,
+read-only connections, stored-data rejection, report publication and overwrite
+protection, and the analysis CLI.
 Database-writing tests use temporary directories. Synthetic records are labeled
 as test fixtures and never inserted into the application database by the suite
 or startup.
 
-Phase 2 checkpoint: 92 tests passed on Python 3.12.14 and 3.14.2; the user's
-Codespace also passed those 92 tests on Python 3.14.2. Phase 3 validation:
-**152 tests passed on each of Python 3.12.14 and 3.14.2** on Linux, using
-`python-dotenv` **1.2.4** and `pytest` **9.1.1**. Startup and empty-template
-validation succeeded with zero rounds. A native Windows run has not been verified.
+Phase 2 checkpoint: 92 tests passed locally on Python 3.12.14 and 3.14.2, and
+in the user's Codespace on Python 3.14.2. Phase 3 checkpoint: 152 tests passed
+locally on each version; the source was pushed to GitHub as commit `a8827de`.
+Phase 4 validation: **211 tests passed on each of Python 3.12.14 and 3.14.2**
+on Linux, using `python-dotenv` **1.2.4** and `pytest` **9.1.1**. Startup and
+empty-database report export succeeded. A native Windows run has not been verified.
 
-## Phase 3 source changes
+## Phase 4 source changes
 
 | File | Change |
 | --- | --- |
-| `collectors/json_importer.py` | New bounded JSON validation and explicit import workflow |
-| `collectors/__init__.py` | Updated package description |
-| `import_rounds.py` | New import command with dry-run support and safe diagnostics |
-| `examples/rounds.empty.json` | New empty template, containing no game data |
-| `database/repository.py` | Atomic batch inserts retaining Phase 2 duplicate behavior |
-| `main.py` | Phase 3 startup status |
-| `tests/test_importer.py` | New Phase 3 tests |
-| `tests/test_setup.py` | Existing checks adapted to Phase 3 startup |
+| `analysis/descriptive.py` | New historical statistics, filters, snapshot reading, and metadata checks |
+| `analysis/reporting.py` | New aggregate JSON serialization and protected report publication |
+| `analysis/__init__.py` | Updated package description |
+| `analyze_rounds.py` | New analysis and report-export command |
+| `database/database.py` | Additional read-only connection function |
+| `database/migrations.py` | Additional schema verification function that performs no migrations |
+| `main.py` | Phase 4 startup status |
+| `import_rounds.py` | Phase 4 status while retaining the existing import workflow |
+| `tests/test_analysis.py` | New Phase 4 tests |
+| `tests/test_setup.py` | Existing checks adapted to Phase 4 startup |
 | `README.md` | Updated installation, usage, and limitations |
 
 Configuration, directories, `.env.example`, `.gitignore`, and requirements
-remain compatible with Phase 2. Database schema version remains 1. Other
+remain compatible with Phase 3. Database schema version remains 1. Other
 feature packages remain placeholders.
 
 ## Git and current limitations
@@ -357,8 +460,8 @@ After reviewing and testing a source update in your own checkout:
 
 ```bash
 git status
-git add README.md main.py import_rounds.py collectors database tests examples
-git commit -m "Implement AIE Phase 3 local JSON import"
+git add README.md main.py import_rounds.py analyze_rounds.py analysis database tests
+git commit -m "Implement AIE Phase 4 descriptive analysis"
 git push
 ```
 
@@ -366,7 +469,7 @@ Current limitations:
 
 - No BetPawa connection, login, credentials, browser automation, scraper, or API integration.
 - No automatic acquisition of real or historical Aviator data; imports require a supplied local file.
-- No cryptographic verifier, statistical analysis, prediction engine, or ML models.
+- No cryptographic verifier, inferential hypothesis tests, prediction engine, or ML models.
 - No prediction accuracy claims, dashboard implementation, betting features, or transactions.
 
-Development stops at Phase 3. Phase 4 requires a separate instruction.
+Development stops at Phase 4. Phase 5 requires a separate instruction.

@@ -1,4 +1,4 @@
-"""Command-line entry point for Phase 3 local completed-round JSON imports."""
+"""Command-line entry point for local completed-round JSON imports."""
 
 import argparse
 import logging
@@ -42,7 +42,7 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("Import failed. Check configuration, database compatibility, and file permissions.")
         return 1
 
-    print("Aviator Intelligence Engine\nPhase: 3")
+    print("Aviator Intelligence Engine\nPhase: 4")
     if report.dry_run:
         print(f"Import: VALIDATED\nRows validated: {report.rows_read}\nDatabase check: NOT RUN\nDatabase changes: NONE")
     else:

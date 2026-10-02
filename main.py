@@ -1,4 +1,4 @@
-"""Phase 3 startup entry point for the Aviator Intelligence Engine."""
+"""Phase 4 startup entry point for the Aviator Intelligence Engine."""
 
 from contextlib import closing
 from dataclasses import dataclass
@@ -40,7 +40,7 @@ def initialize_application(settings: Settings | None = None) -> StartupState:
     if not all(directory.is_dir() for directory in active_settings.required_directories):
         raise RuntimeError("Required directory check failed.")
 
-    logger.info("Phase 3 initialization complete; schema version %s.", schema_version)
+    logger.info("Phase 4 initialization complete; schema version %s.", schema_version)
     return StartupState(active_settings, schema_version, rounds_stored)
 
 
@@ -60,7 +60,7 @@ def main() -> int:
 
     print(
         "Aviator Intelligence Engine\n"
-        "Phase: 3\n"
+        "Phase: 4\n"
         "Status: INITIALIZED\n"
         "Database: READY\n"
         f"Schema version: {state.schema_version}\n"

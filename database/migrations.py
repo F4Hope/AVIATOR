@@ -92,6 +92,15 @@ def _verify_schema(connection: sqlite3.Connection) -> None:
         raise SchemaVersionError("The database migration history is invalid.")
 
 
+def verify_schema(connection: sqlite3.Connection) -> int:
+    """Verify the managed schema without migrations, writes, or transaction changes."""
+    version = connection.execute("PRAGMA user_version").fetchone()[0]
+    if version != SCHEMA_VERSION:
+        raise SchemaVersionError("The database version is not supported by this application.")
+    _verify_schema(connection)
+    return version
+
+
 def initialize_schema(connection: sqlite3.Connection) -> int:
     """Upgrade an empty Phase 1 database atomically; never delete existing data.
 
@@ -118,7 +127,7 @@ def initialize_schema(connection: sqlite3.Connection) -> int:
             connection.execute("PRAGMA user_version = 1")
         elif version != SCHEMA_VERSION:
             raise SchemaVersionError("The database version is not supported by this application.")
-        _verify_schema(connection)
+        verify_schema(connection)
         connection.commit()
     except BaseException:
         connection.rollback()
