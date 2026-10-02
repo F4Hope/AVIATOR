@@ -306,8 +306,13 @@ def test_launch_and_interrupt_close_the_server_without_database_writes(settings:
     opened = []
 
     class InterruptServer(DashboardHTTPServer):
-        def __init__(self, settings: Settings, port: int) -> None:
-            super().__init__(settings, port=0)  # Avoid relying on a free fixed port in this test.
+        def __init__(
+            self, settings: Settings, port: int, bind_host: str = "127.0.0.1",
+            public_hosts: tuple[str, ...] = (),
+        ) -> None:
+            super().__init__(
+                settings, port=0, bind_host=bind_host, public_hosts=public_hosts
+            )  # Avoid relying on a free fixed port in this test.
             opened.append(self)
 
         def serve_forever(self, poll_interval: float = 0.5) -> None:
@@ -320,3 +325,30 @@ def test_launch_and_interrupt_close_the_server_without_database_writes(settings:
     assert "Phase: 9\nDashboard: RUNNING\nURL: http://127.0.0.1:8000" in output
     assert opened[0].fileno() == -1
     assert not settings.data_dir.exists()
+
+
+
+def test_hosted_server_accepts_configured_public_host(settings: Settings) -> None:
+    from contextlib import closing
+    from database.database import connect_database
+    from database.migrations import initialize_schema
+
+    with closing(connect_database(settings)) as connection:
+        initialize_schema(connection)
+    with DashboardHTTPServer(
+        settings, port=0, bind_host="127.0.0.1", public_hosts=("app.example.test",)
+    ) as server:
+        status, _, _ = request(server, "/api/status", headers={"Host": "app.example.test"})
+        assert status == 200
+        status, _, body = request(server, "/api/status", headers={"Host": "evil.example.test"})
+        assert status == 403
+        assert json.loads(body) == {"error": "HOST_NOT_ALLOWED"}
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["https://app.example.test", "app.example.test/path", "bad host", ""],
+)
+def test_hosted_server_rejects_invalid_public_host(settings: Settings, host: str) -> None:
+    with pytest.raises(ValueError):
+        DashboardHTTPServer(settings, port=0, public_hosts=(host,))
