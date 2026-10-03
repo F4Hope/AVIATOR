@@ -8,7 +8,7 @@ from pathlib import Path
 from threading import Event
 from time import sleep
 
-from playwright.sync_api import Browser, Page, Response, WebSocket, sync_playwright
+from playwright.sync_api import Browser, Frame, Page, Request, Response, WebSocket, sync_playwright
 
 from collectors.network_probe import ProbeWriter, payload_metadata, safe_url
 
@@ -67,6 +67,28 @@ class NativeBrowserProbe:
         except Exception:
             logger.debug("Response observation skipped.", exc_info=False)
 
+    def _record_request_failed(self, request: Request) -> None:
+        try:
+            failure = request.failure or ""
+            self.writer.append({
+                "kind": "request_failed",
+                "url": safe_url(request.url),
+                "resource_type": request.resource_type,
+                "failure": payload_metadata(failure),
+            })
+        except Exception:
+            logger.debug("Failed-request observation skipped.", exc_info=False)
+
+    def _record_frame_navigated(self, frame: Frame) -> None:
+        try:
+            self.writer.append({
+                "kind": "frame_navigated",
+                "url": safe_url(frame.url),
+                "is_main_frame": frame == frame.page.main_frame,
+            })
+        except Exception:
+            logger.debug("Frame navigation observation skipped.", exc_info=False)
+
     def _record_websocket(self, socket: WebSocket) -> None:
         socket_url = safe_url(socket.url)
         self.writer.append({"kind": "websocket_open", "url": socket_url})
@@ -100,6 +122,8 @@ class NativeBrowserProbe:
             return
         self._attached_pages.add(identity)
         page.on("response", self._record_response)
+        page.on("requestfailed", self._record_request_failed)
+        page.on("framenavigated", self._record_frame_navigated)
         page.on("websocket", self._record_websocket)
         try:
             self.writer.append({
