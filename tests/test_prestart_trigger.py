@@ -125,12 +125,14 @@ def test_triggered_sample_uses_trigger_time_not_target_result() -> None:
         events.extend(
             [
                 _event(previous + 2.0, 64),
-                _event(previous + 8.5, 128),
+                _event(previous + 4.0, 64),
                 _event(previous + 9.2, 256),
-                # This event is after the trigger and must not be in its interval.
-                _event(previous + 9.6, 2048),
             ]
         )
+        if index >= 5:
+            # Holdout-only event after the trained trigger signature. It cannot
+            # influence discovery and must not enter the triggered feature row.
+            events.append(_event(previous + 9.6, 2048))
     ordered = tuple(sorted(events, key=lambda item: item.timestamp))
 
     discovery = discover_prestart_trigger_signatures(
