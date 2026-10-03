@@ -15,6 +15,7 @@ from config.settings import DEVELOPMENT_PHASE, load_settings
 from models.baseline import BaselineConfig
 from prediction.live import (
     DEFAULT_LEDGER_FILENAME,
+    arm_prediction_session,
     invalidate_if_collector_session_changed,
     invalidate_outstanding_lock,
     process_live_prediction_cycle,
@@ -62,7 +63,14 @@ def _heartbeat_session(path: Path, max_age_seconds: float) -> str | None:
 
 def _print_event(event: dict[str, object]) -> None:
     kind = event.get("event")
-    if kind == "prediction_locked":
+    if kind == "prediction_armed":
+        print(
+            "\nPREDICTION ARMED\n"
+            f"Collector session: {event['collector_session_id']}\n"
+            f"History count: {event['history_count']}\n"
+            "Waiting for one fresh completed round before locking the following round."
+        )
+    elif kind == "prediction_locked":
         print(
             "\nPREDICTION LOCKED\n"
             f"Lock ID: {event['lock_id']}\n"
@@ -158,6 +166,11 @@ def main(argv: list[str] | None = None) -> int:
             )
             if changed is not None:
                 _print_event(changed)
+            armed = arm_prediction_session(
+                settings, dom_path, ledger_path, collector_session_id
+            )
+            if armed is not None:
+                _print_event(armed)
             for event in process_live_prediction_cycle(
                 settings, dom_path, ledger_path, config, collector_session_id
             ):
@@ -205,6 +218,12 @@ def main(argv: list[str] | None = None) -> int:
             )
             if changed is not None:
                 _print_event(changed)
+            if recovered or changed is not None:
+                armed = arm_prediction_session(
+                    settings, dom_path, ledger_path, collector_session_id
+                )
+                if armed is not None:
+                    _print_event(armed)
             current = _file_signature(dom_path)
             if not recovered and current == signature:
                 continue
