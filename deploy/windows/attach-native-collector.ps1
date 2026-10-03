@@ -23,10 +23,11 @@ try {
     New-Item -ItemType Directory -Path $rawDir -Force | Out-Null
     $probePath = Join-Path $rawDir "aviator-network-probe.jsonl"
     $markerPath = Join-Path $rawDir "aviator-round-markers.jsonl"
+    $domPath = Join-Path $rawDir "aviator-dom-multipliers.jsonl"
     $archiveDir = Join-Path $rawDir "archive"
     $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 
-    if ((Test-Path $probePath) -or (Test-Path $markerPath)) {
+    if ((Test-Path $probePath) -or (Test-Path $markerPath) -or (Test-Path $domPath)) {
         New-Item -ItemType Directory -Path $archiveDir -Force | Out-Null
     }
     if (Test-Path $probePath) {
@@ -38,6 +39,11 @@ try {
         $markerArchivePath = Join-Path $archiveDir "aviator-round-markers-$stamp.jsonl"
         Move-Item -Path $markerPath -Destination $markerArchivePath
         Write-Host "Archived previous markers: $markerArchivePath" -ForegroundColor DarkGray
+    }
+    if (Test-Path $domPath) {
+        $domArchivePath = Join-Path $archiveDir "aviator-dom-multipliers-$stamp.jsonl"
+        Move-Item -Path $domPath -Destination $domArchivePath
+        Write-Host "Archived previous DOM multipliers: $domArchivePath" -ForegroundColor DarkGray
     }
 
     Write-Host "Attaching AIE to the already-running Edge session..." -ForegroundColor Cyan

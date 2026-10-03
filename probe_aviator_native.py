@@ -38,6 +38,7 @@ def main(argv: list[str] | None = None) -> int:
                 target_url=target_url,
                 output_path=settings.raw_data_dir / args.output,
                 cdp_url=args.cdp_url,
+                dom_output_path=settings.raw_data_dir / "aviator-dom-multipliers.jsonl",
             )
         )
     except (KeyError, OSError, ValueError):
@@ -60,6 +61,7 @@ def main(argv: list[str] | None = None) -> int:
         f"CDP endpoint: {probe.config.cdp_url}\n"
         f"Source label: {DEFAULT_SOURCE}\n"
         f"Sanitized output: {probe.config.output_path}\n"
+        f"DOM multiplier output: {probe.config.dom_output_path}\n"
         "Use the opened browser manually. No cookies, headers, query strings, passwords, "
         "tokens, or raw payload values are written to the probe file."
     )
