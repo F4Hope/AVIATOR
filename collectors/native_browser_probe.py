@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+from pathlib import Path
 from threading import Event
 from time import sleep
 
@@ -18,12 +19,10 @@ logger = logging.getLogger("aie.collectors.native_browser_probe")
 @dataclass(frozen=True, slots=True)
 class NativeBrowserProbeConfig:
     target_url: str
-    output_path: object
+    output_path: Path
     cdp_url: str = "http://127.0.0.1:9222"
 
     def __post_init__(self) -> None:
-        from pathlib import Path
-
         if not self.target_url.startswith("https://"):
             raise ValueError("target_url must use https://.")
         if not self.cdp_url.startswith(("http://127.0.0.1:", "http://localhost:")):
@@ -123,15 +122,12 @@ class NativeBrowserProbe:
         """Attach to the existing local browser and observe until stopped."""
         with sync_playwright() as playwright:
             browser = playwright.chromium.connect_over_cdp(self.config.cdp_url, timeout=30_000)
-            try:
-                self._attach_browser(browser)
-                logger.info("Native probe attached to local Edge over CDP.")
-                while not self.stop_event.is_set():
-                    if not any(context.pages for context in browser.contexts):
-                        raise RuntimeError("No open browser pages remain.")
-                    sleep(1)
-            finally:
-                browser.close()
+            self._attach_browser(browser)
+            logger.info("Native probe attached to local Edge over CDP.")
+            while not self.stop_event.is_set():
+                if not any(context.pages for context in browser.contexts):
+                    raise RuntimeError("No open browser pages remain.")
+                sleep(1)
 
     def stop(self) -> None:
         self.stop_event.set()
