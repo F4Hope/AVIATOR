@@ -16,6 +16,7 @@ from config.settings import Settings
 from database.database import connect_database_readonly
 from database.migrations import verify_schema
 from models.baseline import BaselineConfig, predict_thresholds
+from prediction.adaptive import AdaptiveConfig, predict_next_multiplier
 
 
 LEDGER_VERSION = 1
@@ -187,11 +188,14 @@ def _prediction_lock(
     rounds: tuple[SourceRound, ...],
     config: BaselineConfig,
     collector_session_id: str | None = None,
+    adaptive_config: AdaptiveConfig | None = None,
 ) -> dict[str, object]:
     if not rounds:
         raise ValueError("At least one completed round is required before locking a prediction.")
 
-    prediction = predict_thresholds([round.multiplier for round in rounds], config)
+    history = [round.multiplier for round in rounds]
+    prediction = predict_thresholds(history, config)
+    point = predict_next_multiplier(history, adaptive_config)
     locked_at = _utc_now_text()
     probabilities = {
         str(item.threshold): (
@@ -217,6 +221,27 @@ def _prediction_lock(
         "timing_guarantee": "locked_before_next_completed_result",
         "collector_session_id": collector_session_id,
         "threshold_probabilities": probabilities,
+        "point_model_name": point.model_name,
+        "point_model_version": point.model_version,
+        "point_status": point.status,
+        "predicted_multiplier": (
+            None if point.predicted_multiplier is None else format(point.predicted_multiplier, "f")
+        ),
+        "prediction_interval": (
+            None
+            if point.lower_multiplier is None or point.upper_multiplier is None
+            else {
+                "lower": format(point.lower_multiplier, "f"),
+                "upper": format(point.upper_multiplier, "f"),
+            }
+        ),
+        "point_confidence": point.confidence,
+        "regime": point.regime,
+        "regime_shift": point.regime_shift,
+        "point_validation_rows": point.validation_rows,
+        "point_validation_mae_log": point.validation_mae_log,
+        "recent_median_mae_log": point.recent_median_mae_log,
+        "point_components": dict(point.components),
     }
 
 
@@ -227,6 +252,29 @@ def _score_lock(lock: Mapping[str, object], actual: SourceRound) -> dict[str, ob
 
     actual_multiplier = Decimal(actual.multiplier)
     scores: dict[str, object] = {}
+    point_score: dict[str, object] | None = None
+    predicted_multiplier_text = lock.get("predicted_multiplier")
+    if isinstance(predicted_multiplier_text, str):
+        predicted_multiplier = Decimal(predicted_multiplier_text)
+        absolute_error = abs(predicted_multiplier - actual_multiplier).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_EVEN
+        )
+        relative_error = (
+            absolute_error / actual_multiplier
+        ).quantize(Decimal("0.000001"), rounding=ROUND_HALF_EVEN)
+        interval = lock.get("prediction_interval")
+        within_interval = None
+        if isinstance(interval, dict):
+            lower = interval.get("lower")
+            upper = interval.get("upper")
+            if isinstance(lower, str) and isinstance(upper, str):
+                within_interval = Decimal(lower) <= actual_multiplier <= Decimal(upper)
+        point_score = {
+            "predicted_multiplier": predicted_multiplier_text,
+            "absolute_error": format(absolute_error, "f"),
+            "relative_error": format(relative_error, "f"),
+            "within_interval": within_interval,
+        }
     for threshold_text, probability_text in probabilities.items():
         if not isinstance(threshold_text, str):
             raise ValueError("Prediction threshold must be text.")
@@ -253,6 +301,7 @@ def _score_lock(lock: Mapping[str, object], actual: SourceRound) -> dict[str, ob
         "actual_round_id": actual.round_id,
         "actual_timestamp": actual.timestamp,
         "actual_multiplier": actual.multiplier,
+        "point_score": point_score,
         "threshold_scores": scores,
     }
 
@@ -263,6 +312,7 @@ def process_live_prediction_cycle(
     ledger_path: Path,
     config: BaselineConfig,
     collector_session_id: str | None = None,
+    adaptive_config: AdaptiveConfig | None = None,
 ) -> tuple[dict[str, object], ...]:
     """Synchronize DOM results, score an existing lock, then lock the next result.
 
@@ -294,7 +344,7 @@ def process_live_prediction_cycle(
                 return tuple(emitted)
 
         if rounds:
-            lock = _prediction_lock(rounds, config, collector_session_id)
+            lock = _prediction_lock(rounds, config, collector_session_id, adaptive_config)
             _append_ledger(ledger_path, lock)
             emitted.append(lock)
         return tuple(emitted)
@@ -329,7 +379,7 @@ def process_live_prediction_cycle(
         _append_ledger(ledger_path, gap)
         emitted.append(gap)
 
-    lock = _prediction_lock(rounds, config, collector_session_id)
+    lock = _prediction_lock(rounds, config, collector_session_id, adaptive_config)
     _append_ledger(ledger_path, lock)
     emitted.append(lock)
     return tuple(emitted)
