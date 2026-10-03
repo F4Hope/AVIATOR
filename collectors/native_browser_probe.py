@@ -14,6 +14,7 @@ import re
 from threading import Event
 from time import monotonic
 from typing import Any
+import uuid
 
 from playwright.sync_api import (
     Browser,
@@ -141,6 +142,7 @@ class NativeBrowserProbe:
         self._cdp_sessions: list[CDPSession] = []
         self._socket_urls: dict[tuple[int, str], str] = {}
         self._last_dom_snapshot: dict[tuple[int, str], tuple[object, ...]] = {}
+        self.collector_session_id = uuid.uuid4().hex
 
     def _record_response(self, response: Response) -> None:
         try:
@@ -417,6 +419,7 @@ class NativeBrowserProbe:
         document = {
             "kind": "dom_probe_heartbeat",
             "observed_at": datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z"),
+            "collector_session_id": self.collector_session_id,
         }
         temporary = path.with_suffix(path.suffix + ".tmp")
         try:
