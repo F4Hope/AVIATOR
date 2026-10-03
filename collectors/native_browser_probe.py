@@ -462,7 +462,8 @@ class NativeBrowserProbe:
 
     def _attach_browser(self, browser: Browser) -> None:
         if not browser.contexts:
-            raise RuntimeError("Local Edge returned no browser context.")
+            logger.debug("Local Edge currently exposes no browser context.")
+            return
         for context in browser.contexts:
             context.on("page", self._attach_page)
             for page in context.pages:
