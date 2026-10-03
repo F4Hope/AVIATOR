@@ -14,15 +14,11 @@ import math
 from statistics import median, pstdev
 from typing import Iterable, Sequence
 
-from sklearn.linear_model import Ridge
-from sklearn.preprocessing import StandardScaler
-from sklearn.pipeline import make_pipeline
-
 from prediction.features import MAX_FEATURE_MULTIPLIER
 
 
 MODEL_NAME = "adaptive-log-multiplier-ensemble"
-MODEL_VERSION = "1"
+MODEL_VERSION = "2"
 
 
 def _value(value: Decimal | str | int | float) -> float:
@@ -145,14 +141,129 @@ def _ewma_log(history: Sequence[float], config: AdaptiveConfig) -> float:
     return result
 
 
+@dataclass(frozen=True, slots=True)
+class _PureRidgeModel:
+    means: tuple[float, ...]
+    scales: tuple[float, ...]
+    intercept: float
+    coefficients: tuple[float, ...]
+
+    def predict(self, rows: Sequence[Sequence[float]]) -> list[float]:
+        result: list[float] = []
+        for row in rows:
+            if len(row) != len(self.coefficients):
+                raise ValueError("prediction row has unexpected feature count.")
+            standardized = [
+                (float(value) - mean) / scale
+                for value, mean, scale in zip(row, self.means, self.scales)
+            ]
+            result.append(
+                self.intercept
+                + sum(
+                    coefficient * value
+                    for coefficient, value in zip(self.coefficients, standardized)
+                )
+            )
+        return result
+
+
+def _solve_linear_system(
+    matrix: Sequence[Sequence[float]],
+    vector: Sequence[float],
+) -> tuple[float, ...]:
+    """Solve Ax=b with partial-pivot Gaussian elimination."""
+    size = len(vector)
+    if size == 0 or len(matrix) != size or any(len(row) != size for row in matrix):
+        raise ValueError("linear system must be square and nonempty.")
+
+    augmented = [
+        [float(value) for value in row] + [float(rhs)]
+        for row, rhs in zip(matrix, vector)
+    ]
+
+    for column in range(size):
+        pivot = max(range(column, size), key=lambda row: abs(augmented[row][column]))
+        if abs(augmented[pivot][column]) < 1e-12:
+            raise ValueError("ridge system is numerically singular.")
+        if pivot != column:
+            augmented[column], augmented[pivot] = augmented[pivot], augmented[column]
+
+        pivot_value = augmented[column][column]
+        for item in range(column, size + 1):
+            augmented[column][item] /= pivot_value
+
+        for row in range(size):
+            if row == column:
+                continue
+            factor = augmented[row][column]
+            if factor == 0.0:
+                continue
+            for item in range(column, size + 1):
+                augmented[row][item] -= factor * augmented[column][item]
+
+    return tuple(augmented[row][size] for row in range(size))
+
+
 def _fit_ridge(
     x: Sequence[Sequence[float]],
     y: Sequence[float],
     alpha: float,
-):
-    model = make_pipeline(StandardScaler(), Ridge(alpha=alpha))
-    model.fit(x, y)
-    return model
+) -> _PureRidgeModel:
+    """Fit standardized Ridge regression using only the Python standard library."""
+    if not x or not y or len(x) != len(y):
+        raise ValueError("ridge training data must be nonempty and aligned.")
+    if alpha <= 0:
+        raise ValueError("ridge alpha must be positive.")
+
+    feature_count = len(x[0])
+    if feature_count == 0 or any(len(row) != feature_count for row in x):
+        raise ValueError("ridge rows must have a consistent nonzero feature count.")
+
+    sample_count = len(x)
+    means = tuple(
+        sum(float(row[column]) for row in x) / sample_count
+        for column in range(feature_count)
+    )
+    scales_list: list[float] = []
+    for column, mean in enumerate(means):
+        variance = (
+            sum((float(row[column]) - mean) ** 2 for row in x) / sample_count
+        )
+        scale = math.sqrt(variance)
+        scales_list.append(scale if scale > 1e-12 else 1.0)
+    scales = tuple(scales_list)
+
+    standardized = [
+        [
+            (float(value) - means[column]) / scales[column]
+            for column, value in enumerate(row)
+        ]
+        for row in x
+    ]
+    intercept = sum(float(value) for value in y) / sample_count
+    centered_y = [float(value) - intercept for value in y]
+
+    gram = [[0.0 for _ in range(feature_count)] for _ in range(feature_count)]
+    rhs = [0.0 for _ in range(feature_count)]
+
+    for row, target in zip(standardized, centered_y):
+        for i in range(feature_count):
+            rhs[i] += row[i] * target
+            for j in range(i, feature_count):
+                gram[i][j] += row[i] * row[j]
+
+    for i in range(feature_count):
+        for j in range(i):
+            gram[i][j] = gram[j][i]
+        gram[i][i] += float(alpha)
+
+    coefficients = _solve_linear_system(gram, rhs)
+    return _PureRidgeModel(
+        means=means,
+        scales=scales,
+        intercept=intercept,
+        coefficients=coefficients,
+    )
 
 
 def _mae(actual: Sequence[float], predicted: Sequence[float]) -> float:
