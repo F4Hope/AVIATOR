@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 import sys
 
-from collectors.probe_analysis import summarize_binary_frame_classes, summarize_live_transports, summarize_marker_class_stats, summarize_marker_correlations, summarize_marker_signature_stats, summarize_probe
+from collectors.probe_analysis import extract_dom_completed_rounds, summarize_binary_frame_classes, summarize_live_transports, summarize_marker_class_stats, summarize_marker_correlations, summarize_marker_signature_stats, summarize_probe
 from config.settings import DEVELOPMENT_PHASE, load_settings
 
 
@@ -28,6 +28,8 @@ def main(argv: list[str] | None = None) -> int:
         correlations = summarize_marker_correlations(probe_path, marker_path)
         marker_stats = summarize_marker_class_stats(probe_path, marker_path)
         signature_stats = summarize_marker_signature_stats(probe_path, marker_path)
+        dom_path = settings.raw_data_dir / "aviator-dom-multipliers.jsonl"
+        dom_rounds = extract_dom_completed_rounds(dom_path)
         candidates = summarize_probe(probe_path)
     except (OSError, ValueError):
         print("Probe inspection failed. Check the probe filename and configuration.", file=sys.stderr)
@@ -42,7 +44,8 @@ def main(argv: list[str] | None = None) -> int:
         f"Binary frame classes: {len(frame_classes)}\n"
         f"Marker correlations: {len(correlations)}\n"
         f"Marker class stats: {len(marker_stats)}\n"
-        f"Marker signature stats: {len(signature_stats)}"
+        f"Marker signature stats: {len(signature_stats)}\n"
+        f"DOM completed rounds: {len(dom_rounds)}"
     )
 
     if live_candidates:
@@ -143,6 +146,15 @@ def main(argv: list[str] | None = None) -> int:
                 f"median_offset_ms={stat.median_nearest_offset_ms} url={stat.url}"
             )
             shown += 1
+
+    if dom_rounds:
+        print("\nDOM COMPLETED ROUND CANDIDATES")
+        for round_event in dom_rounds[-args.limit:]:
+            print(
+                f"  {round_event.observed_at} multiplier={round_event.multiplier} "
+                f"edge={round_event.edge} overlap={round_event.overlap} "
+                f"history_size={round_event.history_size} y={round_event.y_bucket}"
+            )
 
     for index, candidate in enumerate(candidates[: args.limit], start=1):
         print(
