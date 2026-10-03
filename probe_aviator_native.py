@@ -39,6 +39,7 @@ def main(argv: list[str] | None = None) -> int:
                 output_path=settings.raw_data_dir / args.output,
                 cdp_url=args.cdp_url,
                 dom_output_path=settings.raw_data_dir / "aviator-dom-multipliers.jsonl",
+                heartbeat_path=settings.raw_data_dir / "aviator-dom-heartbeat.json",
             )
         )
     except (KeyError, OSError, ValueError):
@@ -62,6 +63,7 @@ def main(argv: list[str] | None = None) -> int:
         f"Source label: {DEFAULT_SOURCE}\n"
         f"Sanitized output: {probe.config.output_path}\n"
         f"DOM multiplier output: {probe.config.dom_output_path}\n"
+        f"Collector heartbeat: {probe.config.heartbeat_path}\n"
         "Use the opened browser manually. No cookies, headers, query strings, passwords, "
         "tokens, or raw payload values are written to the probe file."
     )
