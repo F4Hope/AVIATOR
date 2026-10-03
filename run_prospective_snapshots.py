@@ -23,6 +23,7 @@ from prediction.prestart_trigger import (
 from prediction.prospective_forecast import (
     attach_forecast,
     forecast_snapshot_probabilities,
+    instant_prior_event,
 )
 from prediction.prospective import (
     DEFAULT_SNAPSHOT_LEDGER_FILENAME,
@@ -177,6 +178,46 @@ def _eof(path: Path) -> int:
         return 0
 
 
+def _record_boundary_and_instant_forecast(
+    ledger_path: Path,
+    collector_session_id: str,
+    previous_round: SnapshotRound,
+    rounds: tuple[SnapshotRound, ...],
+) -> None:
+    """Publish the earliest causal forecast immediately after a completed result."""
+    boundary = {
+        "event": "prospective_boundary_ready",
+        "observed_at": utc_text(),
+        "collector_session_id": collector_session_id,
+        "previous_round_id": previous_round.round_id,
+        "previous_round_timestamp": previous_round.timestamp,
+    }
+    append_snapshot_event(ledger_path, boundary)
+    _print_event(boundary)
+
+    previous_index = next(
+        (
+            index for index, round_ in enumerate(rounds)
+            if round_.round_id == previous_round.round_id
+        ),
+        None,
+    )
+    if previous_index is None:
+        raise RuntimeError("Previous round is unavailable for immediate forecast.")
+
+    instant = instant_prior_event(
+        previous_round_id=previous_round.round_id,
+        previous_round_timestamp=previous_round.timestamp,
+        history_multipliers=[
+            round_.multiplier
+            for round_ in rounds[: previous_index + 1]
+        ],
+        observed_at=utc_text(),
+    )
+    append_snapshot_event(ledger_path, instant)
+    _print_event(instant)
+
+
 def _print_event(event: dict[str, object]) -> None:
     kind = event.get("event")
     if kind == "prospective_capture_armed":
@@ -191,7 +232,24 @@ def _print_event(event: dict[str, object]) -> None:
             "\nPRE-ROUND BOUNDARY READY\n"
             f"Previous round: {event['previous_round_id']}\n"
             f"Completed at: {event['previous_round_timestamp']}\n"
-            "Waiting for a frozen transport trigger."
+            "Immediate historical forecast follows; trigger update is optional."
+        )
+    elif kind == "pre_round_prior_forecast":
+        probabilities = event.get("probabilities")
+        probability_lines = ""
+        if isinstance(probabilities, dict):
+            for threshold in ("1.5", "2", "5"):
+                value = probabilities.get(threshold)
+                if isinstance(value, str):
+                    probability_lines += (
+                        f"\nP(>= {threshold}x): {float(value) * 100:.1f}%"
+                    )
+        print(
+            "\nINSTANT PRE-ROUND FORECAST\n"
+            f"Issued at: {event['observed_at']}\n"
+            f"History through: {event['previous_round_timestamp']}"
+            + probability_lines
+            + "\nSource: historical prior (available immediately)"
         )
     elif kind == "pre_round_snapshot_locked":
         forecast = event.get("forecast")
@@ -199,15 +257,37 @@ def _print_event(event: dict[str, object]) -> None:
         if isinstance(forecast, dict):
             probabilities = forecast.get("probabilities")
             historical = forecast.get("historical_probabilities")
+            gates = forecast.get("gates")
+            probability_lines = ""
+            if isinstance(probabilities, dict):
+                for threshold in ("1.5", "2", "5"):
+                    value = probabilities.get(threshold)
+                    if isinstance(value, str):
+                        probability_lines += (
+                            f"\nP(>= {threshold}x): {float(value) * 100:.1f}%"
+                        )
+            gate_lines = ""
+            if isinstance(gates, dict):
+                for threshold in ("1.5", "2", "5"):
+                    gate = gates.get(threshold)
+                    if isinstance(gate, dict):
+                        source = gate.get("source")
+                        samples = gate.get("validation_samples")
+                        skill = gate.get("candidate_skill_vs_prior_pct")
+                        gate_lines += (
+                            f"\n{threshold}x source: {source}; "
+                            f"validation={samples}; skill_vs_prior={skill}"
+                        )
             forecast_text = (
-                "\n\nPRE-ROUND PROBABILITY FORECAST\n"
-                f"Probabilities: {probabilities}\n"
-                f"Historical prior: {historical}\n"
-                f"Confidence: {forecast.get('confidence')}\n"
-                f"Prospective calibration samples: "
+                "\n\nTRIGGER UPDATE\n"
+                + probability_lines
+                + f"\nHistorical prior: {historical}\n"
+                f"Calibration support: {forecast.get('calibration_support')}\n"
+                f"Prospective samples available: "
                 f"{forecast.get('scored_prospective_samples')}\n"
                 f"Calibration cohort: {forecast.get('cohort_kind')} "
                 f"({forecast.get('cohort_samples')} samples)"
+                + gate_lines
             )
         print(
             "\nPRE-ROUND SNAPSHOT LOCKED\n"
@@ -402,15 +482,12 @@ def main(argv: list[str] | None = None) -> int:
                     else:
                         previous_round = actual
                         armed_history_count = None
-                        boundary = {
-                            "event": "prospective_boundary_ready",
-                            "observed_at": utc_text(),
-                            "collector_session_id": session,
-                            "previous_round_id": actual.round_id,
-                            "previous_round_timestamp": actual.timestamp,
-                        }
-                        append_snapshot_event(ledger_path, boundary)
-                        _print_event(boundary)
+                        _record_boundary_and_instant_forecast(
+                            ledger_path,
+                            session,
+                            actual,
+                            rounds,
+                        )
                     interval_events.clear()
                     network_offset = _eof(network_path)
                     time.sleep(args.poll_seconds)
@@ -425,15 +502,12 @@ def main(argv: list[str] | None = None) -> int:
                         if fresh_count == 1:
                             previous_round = rounds[-1]
                             armed_history_count = None
-                            boundary = {
-                                "event": "prospective_boundary_ready",
-                                "observed_at": utc_text(),
-                                "collector_session_id": session,
-                                "previous_round_id": previous_round.round_id,
-                                "previous_round_timestamp": previous_round.timestamp,
-                            }
-                            append_snapshot_event(ledger_path, boundary)
-                            _print_event(boundary)
+                            _record_boundary_and_instant_forecast(
+                                ledger_path,
+                                session,
+                                previous_round,
+                                rounds,
+                            )
                             interval_events.clear()
                             network_offset = _eof(network_path)
                         else:
@@ -467,6 +541,12 @@ def main(argv: list[str] | None = None) -> int:
                         append_snapshot_event(ledger_path, missed)
                         _print_event(missed)
                         previous_round = actual
+                        _record_boundary_and_instant_forecast(
+                            ledger_path,
+                            session,
+                            previous_round,
+                            rounds,
+                        )
                         interval_events.clear()
                         network_offset = _eof(network_path)
 
