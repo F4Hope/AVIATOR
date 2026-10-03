@@ -10,6 +10,7 @@ from statistics import pstdev
 from typing import Mapping, Sequence
 
 from evaluation.adaptive_signal_audit import _RLSProbability
+from models.baseline import BaselineConfig, predict_thresholds
 
 
 DEFAULT_THRESHOLDS: tuple[Decimal, ...] = (
@@ -25,6 +26,7 @@ DEFAULT_FORGETTING_FACTORS: tuple[float, ...] = (0.95, 0.98, 1.0)
 class ProspectiveFeatureSample:
     snapshot_id: str
     locked_at: str
+    trigger_signature: str
     actual_multiplier: Decimal
     prior_probabilities: tuple[tuple[Decimal, float], ...]
     features: tuple[float, ...]
@@ -36,6 +38,9 @@ class ProspectiveThresholdAudit:
     evaluated_targets: int
     positives: int
     prior_brier: Decimal
+    trigger_conditioned_brier: Decimal
+    trigger_conditioned_skill_vs_prior_pct: Decimal
+    trigger_conditioned_better_blocks: int
     feature_brier: Decimal
     feature_skill_vs_prior_pct: Decimal
     better_blocks: int
@@ -162,6 +167,78 @@ def _snapshot_features(
     )
 
 
+def reconstruct_missing_historical_priors(
+    ledger_events: Sequence[Mapping[str, object]],
+    rounds: Sequence[tuple[str, str, str]],
+    *,
+    thresholds: Sequence[Decimal] = DEFAULT_THRESHOLDS,
+) -> tuple[tuple[Mapping[str, object], ...], int]:
+    """Rebuild missing priors using only rounds completed through each lock boundary.
+
+    This is leakage-safe because each snapshot names the previous completed round.
+    Reconstruction never includes the scored target or any later round.
+    """
+    normalized = tuple(Decimal(str(value)) for value in thresholds)
+    index_by_round_id = {
+        round_id: index
+        for index, (round_id, _timestamp, _multiplier) in enumerate(rounds)
+    }
+    multipliers = [multiplier for _round_id, _timestamp, multiplier in rounds]
+
+    rebuilt: list[Mapping[str, object]] = []
+    reconstructed = 0
+    for event in ledger_events:
+        if event.get("event") != "pre_round_snapshot_locked":
+            rebuilt.append(event)
+            continue
+
+        forecast = event.get("forecast")
+        if isinstance(forecast, Mapping) and isinstance(
+            forecast.get("historical_probabilities"), Mapping
+        ):
+            rebuilt.append(event)
+            continue
+
+        previous_round_id = event.get("previous_round_id")
+        if not isinstance(previous_round_id, str):
+            rebuilt.append(event)
+            continue
+        previous_index = index_by_round_id.get(previous_round_id)
+        if previous_index is None:
+            rebuilt.append(event)
+            continue
+
+        history = multipliers[: previous_index + 1]
+        if not history:
+            rebuilt.append(event)
+            continue
+        baseline = predict_thresholds(
+            history,
+            BaselineConfig(
+                thresholds=normalized,
+                min_history=min(20, len(history)),
+            ),
+        )
+        probabilities = {
+            str(item.threshold): format(item.probability, "f")
+            for item in baseline.probabilities
+            if item.probability is not None
+        }
+        if len(probabilities) != len(normalized):
+            rebuilt.append(event)
+            continue
+
+        clone = dict(event)
+        forecast_clone = dict(forecast) if isinstance(forecast, Mapping) else {}
+        forecast_clone["historical_probabilities"] = probabilities
+        forecast_clone["prior_reconstructed_for_audit"] = True
+        clone["forecast"] = forecast_clone
+        rebuilt.append(clone)
+        reconstructed += 1
+
+    return tuple(rebuilt), reconstructed
+
+
 def load_prospective_feature_samples(
     ledger_events: Sequence[Mapping[str, object]],
     *,
@@ -221,16 +298,19 @@ def load_prospective_feature_samples(
         features = _snapshot_features(lock, hash_bins=hash_bins)
         snapshot_id = lock.get("snapshot_id")
         locked_at = lock.get("locked_at")
+        trigger_signature = lock.get("trigger_signature")
         if (
             features is None
             or not isinstance(snapshot_id, str)
             or not isinstance(locked_at, str)
+            or not isinstance(trigger_signature, str)
         ):
             continue
         result.append(
             ProspectiveFeatureSample(
                 snapshot_id=snapshot_id,
                 locked_at=locked_at,
+                trigger_signature=trigger_signature,
                 actual_multiplier=actual,
                 prior_probabilities=tuple(prior_values),
                 features=features,
@@ -302,8 +382,14 @@ def _threshold_audit(
 
     actual_scored: list[int] = []
     prior_scored: list[float] = []
+    trigger_scored: list[float] = []
     feature_scored: list[float] = []
     selected_counts: dict[str, int] = {}
+
+    global_trigger_count = 0
+    global_trigger_positive = 0
+    per_trigger: dict[str, tuple[int, int]] = {}
+    trigger_prior_strength = 20.0
 
     for position, sample in enumerate(samples):
         actual = int(sample.actual_multiplier >= threshold)
@@ -312,6 +398,20 @@ def _threshold_audit(
             candidate.name: candidate.model.predict(sample.features)
             for candidate in candidates
         }
+
+        signature_count, signature_positive = per_trigger.get(
+            sample.trigger_signature,
+            (0, 0),
+        )
+        if signature_count >= 6:
+            trigger_count = signature_count
+            trigger_positive = signature_positive
+        else:
+            trigger_count = global_trigger_count
+            trigger_positive = global_trigger_positive
+        trigger_probability = (
+            prior * trigger_prior_strength + trigger_positive
+        ) / (trigger_prior_strength + trigger_count)
 
         if position >= min_training_samples:
             def recent(candidate: _Candidate) -> tuple[float, str]:
@@ -323,6 +423,7 @@ def _threshold_audit(
             probability = predictions[champion.name]
             actual_scored.append(actual)
             prior_scored.append(prior)
+            trigger_scored.append(max(0.001, min(0.999, trigger_probability)))
             feature_scored.append(probability)
             selected_counts[champion.name] = selected_counts.get(champion.name, 0) + 1
 
@@ -331,8 +432,21 @@ def _threshold_audit(
             candidate.losses.append((probability - actual) ** 2)
             candidate.model.update(sample.features, actual)
 
+        global_trigger_count += 1
+        global_trigger_positive += actual
+        per_trigger[sample.trigger_signature] = (
+            signature_count + 1,
+            signature_positive + actual,
+        )
+
     prior_brier = _brier(actual_scored, prior_scored)
+    trigger_brier = _brier(actual_scored, trigger_scored)
     feature_brier = _brier(actual_scored, feature_scored)
+    trigger_skill = (
+        (prior_brier - trigger_brier) / prior_brier * 100
+        if prior_brier > 0
+        else 0.0
+    )
     skill = (
         (prior_brier - feature_brier) / prior_brier * 100
         if prior_brier > 0
@@ -343,6 +457,14 @@ def _threshold_audit(
         evaluated_targets=len(actual_scored),
         positives=sum(actual_scored),
         prior_brier=_q(prior_brier),
+        trigger_conditioned_brier=_q(trigger_brier),
+        trigger_conditioned_skill_vs_prior_pct=_q(trigger_skill),
+        trigger_conditioned_better_blocks=_block_wins(
+            actual_scored,
+            trigger_scored,
+            prior_scored,
+            blocks,
+        ),
         feature_brier=_q(feature_brier),
         feature_skill_vs_prior_pct=_q(skill),
         better_blocks=_block_wins(
