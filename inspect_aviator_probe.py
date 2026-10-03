@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 import sys
 
-from collectors.probe_analysis import summarize_probe
+from collectors.probe_analysis import summarize_live_transports, summarize_probe
 from config.settings import DEVELOPMENT_PHASE, load_settings
 
 
@@ -21,7 +21,9 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--limit must be between 1 and 100.")
     try:
         settings = load_settings()
-        candidates = summarize_probe(settings.raw_data_dir / args.input)
+        probe_path = settings.raw_data_dir / args.input
+        live_candidates = summarize_live_transports(probe_path)
+        candidates = summarize_probe(probe_path)
     except (OSError, ValueError):
         print("Probe inspection failed. Check the probe filename and configuration.", file=sys.stderr)
         return 1
@@ -30,8 +32,30 @@ def main(argv: list[str] | None = None) -> int:
         "Aviator Intelligence Engine\n"
         f"Phase: {DEVELOPMENT_PHASE}\n"
         "Probe inspection: COMPLETE\n"
-        f"Observed groups: {len(candidates)}"
+        f"Observed groups: {len(candidates)}\n"
+        f"Live transport candidates: {len(live_candidates)}"
     )
+
+    if live_candidates:
+        print("\nLIVE TRANSPORT CANDIDATES")
+        for index, candidate in enumerate(live_candidates[:10], start=1):
+            print(
+                f"\n[L{index}] score={candidate.score} events={candidate.events} "
+                f"received={candidate.received_events} sent={candidate.sent_events}\n"
+                f"url={candidate.url}\n"
+                f"formats: json={candidate.json_events} text={candidate.text_events} "
+                f"binary={candidate.binary_events}\n"
+                f"sizes: min={candidate.min_bytes} max={candidate.max_bytes} "
+                f"distinct={candidate.distinct_sizes}"
+            )
+            if candidate.opcode_counts:
+                print("opcodes:")
+                for opcode, count in candidate.opcode_counts:
+                    print(f"  {opcode}: {count}")
+            if candidate.candidate_paths:
+                print("candidate_paths:")
+                for path, count in candidate.candidate_paths[:20]:
+                    print(f"  {path} ({count})")
     for index, candidate in enumerate(candidates[: args.limit], start=1):
         print(
             f"\n[{index}] kind={candidate.kind} events={candidate.events}\n"
