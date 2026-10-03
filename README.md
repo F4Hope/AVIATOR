@@ -696,10 +696,36 @@ It records hashes, sizes, resource/content types, URLs without query strings,
 and JSON key paths. Sensitive JSON-key names such as authorization, cookie,
 token, session, secret, and password are omitted from structural output.
 
-That sanitized evidence is the gate for the next Phase 9 step: identify the
-actual observable completed-round event and bind an explicit parser for
-`BETPAWA_CM_AVIATOR`. Until that is verified, the dashboard reports live
-collection as discovery-only rather than connected.
+Native Windows discovery now includes a sanitized DOM multiplier observer. It
+detects the dense completed-history strip and can infer a completed outcome only
+when the strip inserts one new multiplier and the prior sequence shifts by the
+same order. This is POST-ROUND evidence; transient live multiplier values are
+not promoted to completed results.
+
+Inspect the current capture first:
+
+```powershell
+.\.venv\Scripts\python.exe inspect_aviator_probe.py --limit 30
+```
+
+Validate extracted DOM rounds without touching SQLite:
+
+```powershell
+.\.venv\Scripts\python.exe ingest_dom_rounds.py --dry-run
+```
+
+Then explicitly store the detected completed outcomes:
+
+```powershell
+.\.venv\Scripts\python.exe ingest_dom_rounds.py
+```
+
+DOM-derived records use source `AIE_DOM_HISTORY_BETPAWA_CM`. Their
+`round_id` values are deterministic local AIE observation identities, not
+BetPawa or Spribe provider-issued round IDs. The stored result timestamp is the
+first time AIE observed the completed multiplier inserted into the history
+strip, and `post_round_data` records that timestamp provenance. Reprocessing
+the same capture is idempotent: exact observations are counted as duplicates.
 
 For the free no-card Windows procedure, see `deploy/windows/README.md`.
 For the optional VPS procedure, see `deploy/README.md`.
@@ -883,10 +909,10 @@ git push
 Current limitations:
 
 - No BetPawa connection, login, credentials, browser automation, scraper, or API integration.
-- No automatic acquisition of real or historical Aviator data; imports require a supplied local file.
+- Native Windows can automatically observe completed multipliers from the visible DOM history strip; provider-issued round IDs are not yet captured, and direct protocol decoding remains unresolved.
 - No cryptographic verifier, inferential hypothesis tests, verified BetPawa round parser, or live prediction engine; Phase 9 currently provides authenticated-browser hosting and sanitized discovery.
 - No prediction accuracy claims, betting features, or transactions.
 - Local development dashboard only; no production deployment or application authentication.
 - Local backups only; no scheduled/offsite backup service or automatic restore.
 
-Development is at Phase 9 browser discovery. Verified provider-specific round extraction is the next required checkpoint.
+Development is at Phase 9 live observation. DOM history extraction is verified against live capture structure; the next checkpoint is continuous ingestion plus pre-round prediction locking and evaluation.
