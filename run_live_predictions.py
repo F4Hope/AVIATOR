@@ -15,6 +15,7 @@ from config.settings import DEVELOPMENT_PHASE, load_settings
 from models.baseline import BaselineConfig
 from prediction.live import (
     DEFAULT_LEDGER_FILENAME,
+    invalidate_if_collector_session_changed,
     invalidate_outstanding_lock,
     process_live_prediction_cycle,
 )
@@ -38,17 +39,25 @@ def _file_signature(path: Path) -> tuple[int, int] | None:
     return stat.st_size, stat.st_mtime_ns
 
 
-def _heartbeat_is_fresh(path: Path, max_age_seconds: float) -> bool:
+def _heartbeat_session(path: Path, max_age_seconds: float) -> str | None:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
-        observed_at = value.get("observed_at") if isinstance(value, dict) else None
-        if value.get("kind") != "dom_probe_heartbeat" or not isinstance(observed_at, str):
-            return False
+        if not isinstance(value, dict):
+            return None
+        observed_at = value.get("observed_at")
+        session_id = value.get("collector_session_id")
+        if (
+            value.get("kind") != "dom_probe_heartbeat"
+            or not isinstance(observed_at, str)
+            or not isinstance(session_id, str)
+            or not session_id
+        ):
+            return None
         heartbeat_at = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
         age = (datetime.now(UTC) - heartbeat_at.astimezone(UTC)).total_seconds()
-        return 0 <= age <= max_age_seconds
+        return session_id if 0 <= age <= max_age_seconds else None
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        return False
+        return None
 
 
 def _print_event(event: dict[str, object]) -> None:
@@ -141,9 +150,17 @@ def main(argv: list[str] | None = None) -> int:
             "Prediction semantics: next completed result; no provider round ID assumed."
         )
 
-        healthy = _heartbeat_is_fresh(heartbeat_path, args.max_heartbeat_age)
+        collector_session_id = _heartbeat_session(heartbeat_path, args.max_heartbeat_age)
+        healthy = collector_session_id is not None
         if healthy:
-            for event in process_live_prediction_cycle(settings, dom_path, ledger_path, config):
+            changed = invalidate_if_collector_session_changed(
+                ledger_path, collector_session_id
+            )
+            if changed is not None:
+                _print_event(changed)
+            for event in process_live_prediction_cycle(
+                settings, dom_path, ledger_path, config, collector_session_id
+            ):
                 _print_event(event)
         else:
             invalidated = invalidate_outstanding_lock(
@@ -163,7 +180,10 @@ def main(argv: list[str] | None = None) -> int:
         was_healthy = healthy
         while True:
             time.sleep(args.poll_seconds)
-            healthy = _heartbeat_is_fresh(heartbeat_path, args.max_heartbeat_age)
+            collector_session_id = _heartbeat_session(
+                heartbeat_path, args.max_heartbeat_age
+            )
+            healthy = collector_session_id is not None
             if not healthy:
                 invalidated = invalidate_outstanding_lock(
                     ledger_path, "collector_heartbeat_missing_or_stale"
@@ -180,11 +200,18 @@ def main(argv: list[str] | None = None) -> int:
 
             recovered = not was_healthy
             was_healthy = True
+            changed = invalidate_if_collector_session_changed(
+                ledger_path, collector_session_id
+            )
+            if changed is not None:
+                _print_event(changed)
             current = _file_signature(dom_path)
             if not recovered and current == signature:
                 continue
             signature = current
-            for event in process_live_prediction_cycle(settings, dom_path, ledger_path, config):
+            for event in process_live_prediction_cycle(
+                settings, dom_path, ledger_path, config, collector_session_id
+            ):
                 _print_event(event)
 
     except KeyboardInterrupt:
