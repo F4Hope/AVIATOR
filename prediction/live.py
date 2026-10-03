@@ -117,6 +117,22 @@ def invalidate_outstanding_lock(
     return event
 
 
+def invalidate_if_collector_session_changed(
+    ledger_path: Path,
+    collector_session_id: str,
+) -> dict[str, object] | None:
+    """Invalidate an outstanding lock created under a different collector session."""
+    if not isinstance(collector_session_id, str) or not collector_session_id.strip():
+        raise ValueError("collector_session_id must be a nonempty string.")
+    events = _load_ledger(ledger_path)
+    outstanding = _outstanding_lock(events)
+    if outstanding is None:
+        return None
+    if outstanding.get("collector_session_id") == collector_session_id:
+        return None
+    return invalidate_outstanding_lock(ledger_path, "collector_session_changed")
+
+
 def _lock_id(history_count: int, history_last_round_id: str, locked_at: str) -> str:
     material = f"{history_count}|{history_last_round_id}|{locked_at}".encode("utf-8")
     return "lock-" + hashlib.sha256(material).hexdigest()[:24]
@@ -125,6 +141,7 @@ def _lock_id(history_count: int, history_last_round_id: str, locked_at: str) -> 
 def _prediction_lock(
     rounds: tuple[SourceRound, ...],
     config: BaselineConfig,
+    collector_session_id: str | None = None,
 ) -> dict[str, object]:
     if not rounds:
         raise ValueError("At least one completed round is required before locking a prediction.")
@@ -153,6 +170,7 @@ def _prediction_lock(
         "history_last_round_id": last.round_id,
         "history_last_timestamp": last.timestamp,
         "timing_guarantee": "locked_before_next_completed_result",
+        "collector_session_id": collector_session_id,
         "threshold_probabilities": probabilities,
     }
 
@@ -199,6 +217,7 @@ def process_live_prediction_cycle(
     dom_path: Path,
     ledger_path: Path,
     config: BaselineConfig,
+    collector_session_id: str | None = None,
 ) -> tuple[dict[str, object], ...]:
     """Synchronize DOM results, score an existing lock, then lock the next result.
 
@@ -214,7 +233,7 @@ def process_live_prediction_cycle(
 
     if outstanding is None:
         if rounds:
-            lock = _prediction_lock(rounds, config)
+            lock = _prediction_lock(rounds, config, collector_session_id)
             _append_ledger(ledger_path, lock)
             emitted.append(lock)
         return tuple(emitted)
@@ -249,7 +268,7 @@ def process_live_prediction_cycle(
         _append_ledger(ledger_path, gap)
         emitted.append(gap)
 
-    lock = _prediction_lock(rounds, config)
+    lock = _prediction_lock(rounds, config, collector_session_id)
     _append_ledger(ledger_path, lock)
     emitted.append(lock)
     return tuple(emitted)
