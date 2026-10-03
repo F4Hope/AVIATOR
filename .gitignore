@@ -59,3 +59,6 @@ logs/
 *.swo
 .DS_Store
 Thumbs.db
+
+# Native persistent browser profile
+data/browser-profile/
