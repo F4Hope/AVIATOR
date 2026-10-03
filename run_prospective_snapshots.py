@@ -20,6 +20,10 @@ from prediction.prestart_trigger import (
     discover_prestart_trigger_signatures,
     event_signature,
 )
+from prediction.prospective_forecast import (
+    attach_forecast,
+    forecast_snapshot_probabilities,
+)
 from prediction.prospective import (
     DEFAULT_SNAPSHOT_LEDGER_FILENAME,
     SnapshotRound,
@@ -190,19 +194,43 @@ def _print_event(event: dict[str, object]) -> None:
             "Waiting for a frozen transport trigger."
         )
     elif kind == "pre_round_snapshot_locked":
+        forecast = event.get("forecast")
+        forecast_text = ""
+        if isinstance(forecast, dict):
+            probabilities = forecast.get("probabilities")
+            historical = forecast.get("historical_probabilities")
+            forecast_text = (
+                "\n\nPRE-ROUND PROBABILITY FORECAST\n"
+                f"Probabilities: {probabilities}\n"
+                f"Historical prior: {historical}\n"
+                f"Confidence: {forecast.get('confidence')}\n"
+                f"Prospective calibration samples: "
+                f"{forecast.get('scored_prospective_samples')}\n"
+                f"Calibration cohort: {forecast.get('cohort_kind')} "
+                f"({forecast.get('cohort_samples')} samples)"
+            )
         print(
             "\nPRE-ROUND SNAPSHOT LOCKED\n"
             f"Snapshot ID: {event['snapshot_id']}\n"
             f"Locked at: {event['locked_at']}\n"
             f"Trigger: {event['trigger_signature']}\n"
             f"Age after prior result: {event['trigger_age_after_previous_seconds']}s"
+            + forecast_text
         )
     elif kind == "pre_round_snapshot_scored":
+        score = event.get("forecast_score")
+        score_text = ""
+        if isinstance(score, dict):
+            score_text = (
+                "\nProbability scores: "
+                f"{score.get('threshold_scores')}"
+            )
         print(
             "\nPRE-ROUND SNAPSHOT SCORED\n"
             f"Snapshot ID: {event['snapshot_id']}\n"
             f"Actual: {event['actual_multiplier']}x\n"
             f"Completed at: {event['actual_timestamp']}"
+            + score_text
         )
     elif kind == "pre_round_snapshot_missed":
         print(
@@ -468,6 +496,26 @@ def main(argv: list[str] | None = None) -> int:
                                 trigger_signatures=frozen,
                                 max_sequence_events=args.max_sequence_events,
                             )
+                            previous_index = next(
+                                (
+                                    index for index, round_ in enumerate(rounds)
+                                    if round_.round_id == previous_round.round_id
+                                ),
+                                None,
+                            )
+                            if previous_index is None:
+                                raise RuntimeError(
+                                    "Previous round disappeared before forecast lock."
+                                )
+                            forecast = forecast_snapshot_probabilities(
+                                [
+                                    round_.multiplier
+                                    for round_ in rounds[: previous_index + 1]
+                                ],
+                                load_snapshot_ledger(ledger_path),
+                                snapshot,
+                            )
+                            snapshot = attach_forecast(snapshot, forecast)
                             append_snapshot_event(ledger_path, snapshot)
                             _print_event(snapshot)
                             break

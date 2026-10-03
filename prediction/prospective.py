@@ -10,12 +10,14 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 import hashlib
 import json
 from pathlib import Path
 from typing import Mapping, Sequence
 
 from prediction.prestart_trigger import TriggerSignature, event_signature
+from prediction.prospective_forecast import score_forecast
 from prediction.system_state import SystemProbeEvent, _parse_timestamp
 
 
@@ -247,7 +249,7 @@ def score_pre_round_snapshot(
     if locked_ts is None or actual_ts is None or actual_ts <= locked_ts:
         raise ValueError("actual result must occur after the snapshot lock.")
 
-    return {
+    result = {
         "event": "pre_round_snapshot_scored",
         "snapshot_id": snapshot_id_value,
         "scored_at": utc_text(),
@@ -255,6 +257,10 @@ def score_pre_round_snapshot(
         "actual_timestamp": actual_round.timestamp,
         "actual_multiplier": actual_round.multiplier,
     }
+    forecast_score = score_forecast(snapshot, Decimal(actual_round.multiplier))
+    if forecast_score is not None:
+        result["forecast_score"] = forecast_score
+    return result
 
 
 def invalidate_snapshot(
