@@ -53,6 +53,24 @@ class LiveTransportCandidate:
     unique_byte_buckets: tuple[tuple[int, int], ...]
 
 
+
+
+@dataclass(frozen=True, slots=True)
+class BinaryFrameClass:
+    url: str
+    direction: str
+    size_bucket: str
+    events: int
+    median_gap_ms: float | None
+    min_gap_ms: float | None
+    max_gap_ms: float | None
+    entropy_mode: float | None
+    zero_ratio_mode: float | None
+    high_bit_ratio_mode: float | None
+    unique_byte_mode: int | None
+    periodicity_score: float
+
+
 def _interesting_paths(paths: Counter[str]) -> tuple[tuple[str, int], ...]:
     ordered = tuple(paths.most_common(50))
     return tuple(
@@ -272,6 +290,157 @@ def summarize_live_transports(path: Path) -> tuple[LiveTransportCandidate, ...]:
                 item.received_events,
                 item.events,
             ),
+            reverse=True,
+        )
+    )
+
+
+def _parse_observed_at(value: object) -> float | None:
+    if not isinstance(value, str) or not value.endswith("Z"):
+        return None
+    try:
+        from datetime import datetime
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _size_bucket(size: int) -> str:
+    if size < 64:
+        return "<64"
+    if size < 128:
+        return "64-127"
+    if size < 256:
+        return "128-255"
+    if size < 512:
+        return "256-511"
+    if size < 1024:
+        return "512-1023"
+    if size < 2048:
+        return "1024-2047"
+    return "2048+"
+
+
+def _mode(counter: Counter[float] | Counter[int]) -> float | int | None:
+    if not counter:
+        return None
+    return counter.most_common(1)[0][0]
+
+
+def summarize_binary_frame_classes(path: Path) -> tuple[BinaryFrameClass, ...]:
+    """Cluster binary WebSocket frames by direction, size band, timing and coarse fingerprint."""
+    if not path.is_file():
+        raise FileNotFoundError("Probe file does not exist.")
+
+    groups: dict[tuple[str, str, str], dict[str, object]] = defaultdict(
+        lambda: {
+            "times": [],
+            "entropy": Counter(),
+            "zero": Counter(),
+            "high_bit": Counter(),
+            "unique": Counter(),
+        }
+    )
+
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+
+            kind = event.get("kind")
+            url = event.get("url")
+            if kind not in {"cdp_websocket_received", "cdp_websocket_sent"} or not isinstance(url, str):
+                continue
+
+            payload = event.get("payload")
+            if not isinstance(payload, dict) or payload.get("format") != "binary":
+                continue
+            size = payload.get("bytes")
+            if not isinstance(size, int) or size < 0:
+                continue
+
+            direction = "received" if kind.endswith("received") else "sent"
+            key = (url, direction, _size_bucket(size))
+            group = groups[key]
+
+            ts = _parse_observed_at(event.get("observed_at"))
+            if ts is not None:
+                times: list[float] = group["times"]  # type: ignore[assignment]
+                times.append(ts)
+
+            fingerprint = payload.get("binary_fingerprint")
+            if not isinstance(fingerprint, dict):
+                continue
+
+            for field, group_key in (
+                ("entropy_bucket", "entropy"),
+                ("zero_ratio_bucket", "zero"),
+                ("high_bit_ratio_bucket", "high_bit"),
+                ("unique_byte_bucket", "unique"),
+            ):
+                value = fingerprint.get(field)
+                if isinstance(value, (int, float)):
+                    counter = group[group_key]
+                    assert isinstance(counter, Counter)
+                    counter[value] += 1
+
+    result: list[BinaryFrameClass] = []
+    for (url, direction, size_bucket), data in groups.items():
+        times = sorted(data["times"])  # type: ignore[arg-type]
+        gaps_ms = [
+            (current - previous) * 1000.0
+            for previous, current in zip(times, times[1:])
+            if current >= previous
+        ]
+        gaps_ms.sort()
+        if gaps_ms:
+            middle = len(gaps_ms) // 2
+            if len(gaps_ms) % 2:
+                median_gap = gaps_ms[middle]
+            else:
+                median_gap = (gaps_ms[middle - 1] + gaps_ms[middle]) / 2
+            mean = sum(gaps_ms) / len(gaps_ms)
+            variance = sum((gap - mean) ** 2 for gap in gaps_ms) / len(gaps_ms)
+            std = variance ** 0.5
+            periodicity = max(0.0, 1.0 - min(1.0, std / mean)) if mean > 0 else 0.0
+            min_gap = gaps_ms[0]
+            max_gap = gaps_ms[-1]
+        else:
+            median_gap = min_gap = max_gap = None
+            periodicity = 0.0
+
+        event_count = len(times)
+        entropy = data["entropy"]; zero = data["zero"]; high_bit = data["high_bit"]; unique = data["unique"]
+        assert isinstance(entropy, Counter)
+        assert isinstance(zero, Counter)
+        assert isinstance(high_bit, Counter)
+        assert isinstance(unique, Counter)
+
+        result.append(
+            BinaryFrameClass(
+                url=url,
+                direction=direction,
+                size_bucket=size_bucket,
+                events=event_count,
+                median_gap_ms=round(median_gap, 1) if median_gap is not None else None,
+                min_gap_ms=round(min_gap, 1) if min_gap is not None else None,
+                max_gap_ms=round(max_gap, 1) if max_gap is not None else None,
+                entropy_mode=float(_mode(entropy)) if _mode(entropy) is not None else None,
+                zero_ratio_mode=float(_mode(zero)) if _mode(zero) is not None else None,
+                high_bit_ratio_mode=float(_mode(high_bit)) if _mode(high_bit) is not None else None,
+                unique_byte_mode=int(_mode(unique)) if _mode(unique) is not None else None,
+                periodicity_score=round(periodicity, 3),
+            )
+        )
+
+    return tuple(
+        sorted(
+            result,
+            key=lambda item: (item.events, item.periodicity_score),
             reverse=True,
         )
     )
