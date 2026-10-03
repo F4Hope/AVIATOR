@@ -21,6 +21,33 @@ SENSITIVE_KEY_PARTS = (
     "session", "credential", "apikey", "api_key",
 )
 
+GAME_NUMERIC_KEYS = frozenset(
+    {
+        "multiplier",
+        "crashmultiplier",
+        "crashpoint",
+        "coefficient",
+        "coef",
+        "payoutmultiplier",
+        "finalmultiplier",
+        "resultmultiplier",
+        "nextmultiplier",
+    }
+)
+GAME_IDENTIFIER_KEYS = frozenset(
+    {
+        "roundid",
+        "nextroundid",
+        "gameid",
+        "gamehash",
+        "hash",
+        "commitment",
+        "serverseedhash",
+        "clientseedhash",
+    }
+)
+MAX_GAME_FIELDS = 64
+
 
 def safe_url(value: str) -> str:
     """Strip query strings and fragments so tokens cannot be persisted in URLs."""
@@ -54,6 +81,80 @@ def json_shape(value: Any) -> tuple[dict[str, str], ...]:
 
     visit(value, "", 0)
     return tuple(paths)
+
+
+def _normalized_key(value: str) -> str:
+    return "".join(character.lower() for character in value if character.isalnum())
+
+
+def game_field_metadata(value: Any) -> tuple[dict[str, object], ...]:
+    """Extract only allowlisted game-integrity fields from decoded JSON.
+
+    Numeric outcome-like fields retain their numeric value so a pre-round
+    disclosure can be tested directly. Round/hash/commitment identifiers are
+    irreversibly hashed before persistence. Authentication/session/token fields
+    remain excluded by the existing sensitive-key policy.
+    """
+    fields: list[dict[str, object]] = []
+
+    def visit(item: Any, path: tuple[str, ...], depth: int) -> None:
+        if len(fields) >= MAX_GAME_FIELDS or depth > MAX_DEPTH:
+            return
+        if isinstance(item, dict):
+            for key, child in item.items():
+                if (
+                    len(fields) >= MAX_GAME_FIELDS
+                    or not isinstance(key, str)
+                    or _sensitive_key(key)
+                ):
+                    continue
+                normalized = _normalized_key(key)
+                child_path = (*path, normalized or "field")
+                path_text = ".".join(child_path)
+
+                if normalized in GAME_NUMERIC_KEYS and not isinstance(child, bool):
+                    numeric: float | None = None
+                    if isinstance(child, (int, float)):
+                        numeric = float(child)
+                    elif isinstance(child, str):
+                        try:
+                            numeric = float(child.strip().rstrip("xX"))
+                        except ValueError:
+                            numeric = None
+                    if (
+                        numeric is not None
+                        and math.isfinite(numeric)
+                        and 0.0 <= numeric <= 1_000_000.0
+                    ):
+                        fields.append(
+                            {
+                                "path": path_text,
+                                "kind": "numeric",
+                                "value": numeric,
+                            }
+                        )
+
+                elif normalized in GAME_IDENTIFIER_KEYS and isinstance(
+                    child, (str, int, float)
+                ) and not isinstance(child, bool):
+                    raw = str(child).encode("utf-8", errors="replace")
+                    fields.append(
+                        {
+                            "path": path_text,
+                            "kind": "identifier_hash",
+                            "sha256_24": hashlib.sha256(raw).hexdigest()[:24],
+                            "length": len(raw),
+                        }
+                    )
+
+                visit(child, child_path, depth + 1)
+
+        elif isinstance(item, list):
+            for child in item[:20]:
+                visit(child, (*path, "[]"), depth + 1)
+
+    visit(value, (), 0)
+    return tuple(fields)
 
 
 def type_name(value: Any) -> str:
@@ -112,7 +213,7 @@ def binary_fingerprint(raw: bytes) -> dict[str, object]:
 
 
 def payload_metadata(payload: str | bytes) -> dict[str, object]:
-    """Fingerprint a frame and expose JSON structure only; never raw values."""
+    """Fingerprint a frame and expose sanitized JSON/game-integrity metadata."""
     raw = payload.encode("utf-8", errors="replace") if isinstance(payload, str) else bytes(payload)
     result: dict[str, object] = {
         "bytes": len(raw),
@@ -130,6 +231,9 @@ def payload_metadata(payload: str | bytes) -> dict[str, object]:
     result["format"] = "json"
     result["root_type"] = type_name(parsed)
     result["shape"] = list(json_shape(parsed))
+    game_fields = game_field_metadata(parsed)
+    if game_fields:
+        result["game_fields"] = list(game_fields)
     return result
 
 
