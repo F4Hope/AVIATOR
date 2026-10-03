@@ -7,7 +7,7 @@ import pytest
 
 from collectors.browser_probe import BrowserProbeConfig
 from collectors.network_probe import ProbeWriter, binary_fingerprint, json_shape, payload_metadata, safe_url
-from collectors.probe_analysis import summarize_live_transports, summarize_probe
+from collectors.probe_analysis import summarize_binary_frame_classes, summarize_live_transports, summarize_probe
 
 
 def test_safe_url_removes_query_and_fragment() -> None:
@@ -226,3 +226,47 @@ def test_live_transport_summary_aggregates_binary_fingerprints(tmp_path: Path) -
     assert candidate.binary_events == 2
     assert candidate.entropy_buckets
     assert candidate.unique_byte_buckets
+
+
+
+def test_binary_frame_structure_discovery_clusters_by_size_and_timing(tmp_path: Path) -> None:
+    path = tmp_path / "probe.jsonl"
+    rows = [
+        ("2026-10-03T00:00:00.000000Z", 80),
+        ("2026-10-03T00:00:00.100000Z", 82),
+        ("2026-10-03T00:00:00.200000Z", 84),
+        ("2026-10-03T00:00:01.000000Z", 600),
+        ("2026-10-03T00:00:03.000000Z", 620),
+    ]
+    for observed_at, size in rows:
+        payload = payload_metadata(bytes([0, 1, 2, 3]) * (size // 4))
+        document = {
+            "observed_at": observed_at,
+            "kind": "cdp_websocket_received",
+            "url": "cdp://websocket/test",
+            "opcode": 2,
+            "payload": payload,
+        }
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(document) + "\n")
+
+    classes = summarize_binary_frame_classes(path)
+    assert len(classes) == 2
+    assert classes[0].size_bucket == "64-127"
+    assert classes[0].events == 3
+    assert classes[0].median_gap_ms == pytest.approx(100.0, abs=0.1)
+    assert classes[1].size_bucket == "512-1023"
+    assert classes[1].events == 2
+    assert classes[1].median_gap_ms == pytest.approx(2000.0, abs=0.1)
+
+
+def test_binary_frame_structure_discovery_ignores_nonbinary(tmp_path: Path) -> None:
+    path = tmp_path / "probe.jsonl"
+    writer = ProbeWriter(path, max_bytes=4096)
+    writer.append({
+        "kind": "cdp_websocket_received",
+        "url": "wss://example.test/text",
+        "opcode": 1,
+        "payload": {"format": "text", "bytes": 5},
+    })
+    assert summarize_binary_frame_classes(path) == ()
