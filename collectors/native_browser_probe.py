@@ -131,7 +131,7 @@ class NativeBrowserProbe:
         self._cdp_targets: set[int] = set()
         self._cdp_sessions: list[CDPSession] = []
         self._socket_urls: dict[tuple[int, str], str] = {}
-        self._last_dom_snapshot: dict[str, tuple[tuple[object, ...], ...]] = {}
+        self._last_dom_snapshot: dict[tuple[int, str], tuple[object, ...]] = {}
 
     def _record_response(self, response: Response) -> None:
         try:
@@ -321,51 +321,63 @@ class NativeBrowserProbe:
         })
 
     def _record_visible_multipliers(self, frame: Frame) -> None:
-        """Persist only visible multiplier-like DOM text plus coarse geometry."""
+        """Persist only multiplier-like DOM values plus coarse rendering metadata."""
         if self.dom_writer is None:
             return
         frame_url = safe_url(frame.url) if frame.url else "about:blank"
-        lowered = frame_url.lower()
-        if "aviator" not in lowered and "spribe" not in lowered:
-            return
         try:
             raw = frame.evaluate(
                 """() => {
                     const pattern = /^\\s*\\d{1,6}(?:\\.\\d{1,3})?[xX]\\s*$/;
                     const result = [];
-                    for (const el of document.querySelectorAll('body *')) {
-                        const text = (el.textContent || '').trim();
-                        if (!pattern.test(text)) continue;
-                        const style = getComputedStyle(el);
-                        if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) continue;
-                        const rect = el.getBoundingClientRect();
-                        if (rect.width <= 0 || rect.height <= 0) continue;
-                        let duplicateParent = false;
-                        for (const child of el.children) {
-                            if ((child.textContent || '').trim() === text) {
-                                duplicateParent = true;
-                                break;
+                    let canvasCount = 0;
+                    const roots = [document];
+                    for (let index = 0; index < roots.length; index++) {
+                        const root = roots[index];
+                        const elements = root.querySelectorAll ? root.querySelectorAll('*') : [];
+                        for (const el of elements) {
+                            if (el.tagName === 'CANVAS') canvasCount += 1;
+                            if (el.shadowRoot) roots.push(el.shadowRoot);
+
+                            const values = [
+                                el.textContent || '',
+                                el.getAttribute ? (el.getAttribute('aria-label') || '') : '',
+                                el.getAttribute ? (el.getAttribute('title') || '') : '',
+                                typeof el.value === 'string' ? el.value : ''
+                            ];
+                            const text = values.map(v => String(v).trim()).find(v => pattern.test(v));
+                            if (!text) continue;
+
+                            const style = getComputedStyle(el);
+                            if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) continue;
+                            const rect = el.getBoundingClientRect();
+                            if (rect.width <= 0 || rect.height <= 0) continue;
+
+                            result.push({
+                                text,
+                                x: rect.x,
+                                y: rect.y,
+                                w: rect.width,
+                                h: rect.height
+                            });
+                            if (result.length >= 100) {
+                                return { candidates: result, canvas_count: canvasCount };
                             }
                         }
-                        if (duplicateParent) continue;
-                        result.push({
-                            text,
-                            x: rect.x,
-                            y: rect.y,
-                            w: rect.width,
-                            h: rect.height
-                        });
-                        if (result.length >= 100) break;
                     }
-                    return result;
+                    return { candidates: result, canvas_count: canvasCount };
                 }"""
             )
         except Exception:
             logger.debug("DOM multiplier observation skipped.", exc_info=False)
             return
 
-        candidates = _normalize_dom_candidates(raw)
-        snapshot = tuple(
+        raw_candidates = raw.get("candidates", []) if isinstance(raw, dict) else []
+        candidates = _normalize_dom_candidates(raw_candidates)
+        canvas_count_raw = raw.get("canvas_count", 0) if isinstance(raw, dict) else 0
+        canvas_count = canvas_count_raw if isinstance(canvas_count_raw, int) and canvas_count_raw >= 0 else 0
+
+        candidate_snapshot = tuple(
             (
                 item["multiplier"],
                 item["x_bucket"],
@@ -375,12 +387,15 @@ class NativeBrowserProbe:
             )
             for item in candidates
         )
-        if self._last_dom_snapshot.get(frame_url) == snapshot:
+        snapshot: tuple[object, ...] = (canvas_count, candidate_snapshot)
+        snapshot_key = (id(frame), frame_url)
+        if self._last_dom_snapshot.get(snapshot_key) == snapshot:
             return
-        self._last_dom_snapshot[frame_url] = snapshot
+        self._last_dom_snapshot[snapshot_key] = snapshot
         self.dom_writer.append({
             "kind": "dom_multiplier_snapshot",
             "url": frame_url,
+            "canvas_count": canvas_count,
             "candidates": list(candidates),
         })
 
