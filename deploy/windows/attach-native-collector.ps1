@@ -24,6 +24,7 @@ try {
     $probePath = Join-Path $rawDir "aviator-network-probe.jsonl"
     $markerPath = Join-Path $rawDir "aviator-round-markers.jsonl"
     $domPath = Join-Path $rawDir "aviator-dom-multipliers.jsonl"
+    $heartbeatPath = Join-Path $rawDir "aviator-dom-heartbeat.json"
     $archiveDir = Join-Path $rawDir "archive"
     $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 
@@ -44,6 +45,9 @@ try {
         $domArchivePath = Join-Path $archiveDir "aviator-dom-multipliers-$stamp.jsonl"
         Move-Item -Path $domPath -Destination $domArchivePath
         Write-Host "Archived previous DOM multipliers: $domArchivePath" -ForegroundColor DarkGray
+    }
+    if (Test-Path $heartbeatPath) {
+        Remove-Item -Path $heartbeatPath -Force
     }
 
     Write-Host "Attaching AIE to the already-running Edge session..." -ForegroundColor Cyan
