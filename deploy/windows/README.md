@@ -1,3 +1,45 @@
+# Windows hosting options
+
+## Recommended when Docker virtualization is unavailable: native Windows mode
+
+This mode does **not** use Docker, WSL2, or hardware virtualization.
+
+It runs:
+
+- Python 3.12 directly on Windows;
+- AIE and SQLite directly from the repository;
+- Microsoft Edge as a persistent authenticated browser;
+- Tailscale Serve for private HTTPS access to the dashboard.
+
+Run the Docker-free bootstrap from Windows PowerShell:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass -Force
+irm https://raw.githubusercontent.com/F4Hope/AVIATOR/main/deploy/windows/bootstrap-native-host.ps1 -OutFile "$env:TEMP\aie-native-bootstrap.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\aie-native-bootstrap.ps1"
+```
+
+After setup completes, start the native collector with:
+
+```powershell
+cd "$HOME\AVIATOR"
+.\deploy\windows\start-native-collector.ps1
+```
+
+A separate persistent Microsoft Edge profile opens. Log into BetPawa manually in
+that Edge window and keep it open while collecting.
+
+Check native host status with:
+
+```powershell
+.\deploy\windows\status-native-aie.ps1
+```
+
+The dashboard is reachable from your other Tailscale devices over the private
+HTTPS URL printed by setup. The Edge login session remains on the host PC.
+
+---
+
 # Free Windows + Tailscale hosting
 
 This is the recommended no-card deployment for AIE.
