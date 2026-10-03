@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 import re
 from threading import Event
-from time import monotonic
+from time import monotonic, sleep
 from typing import Any
 import uuid
 
@@ -469,35 +469,87 @@ class NativeBrowserProbe:
                 self._attach_page(page)
 
     def run(self) -> None:
-        """Attach to the existing local browser and observe until stopped."""
+        """Attach to the existing local browser and observe until stopped.
+
+        Transient page/frame failures are tolerated while the CDP browser connection
+        remains alive. Heartbeats are emitted only after at least one open page is
+        available, so downstream consumers can distinguish process liveness from
+        capture readiness.
+        """
         with sync_playwright() as playwright:
             browser = playwright.chromium.connect_over_cdp(self.config.cdp_url, timeout=30_000)
             self._attach_browser(browser)
             logger.info("Native probe attached to local Edge over CDP with Network enabled.")
+            transient_errors = 0
             try:
                 while not self.stop_event.is_set():
-                    contexts = browser.contexts
-                    open_pages = [
-                        page
-                        for context in contexts
-                        for page in context.pages
-                        if not page.is_closed()
-                    ]
-                    if not open_pages:
-                        raise RuntimeError("No open browser pages remain.")
-                    now = monotonic()
-                    last_scan = getattr(self, "_last_dom_scan_at", 0.0)
-                    if now - last_scan >= 0.75:
-                        self._last_dom_scan_at = now
-                        for page in open_pages:
-                            for frame in page.frames:
-                                self._record_visible_multipliers(frame)
+                    try:
+                        if not browser.is_connected():
+                            raise RuntimeError("Local Edge CDP connection was lost.")
+
+                        # Re-scan contexts so newly-created pages are attached without
+                        # requiring a collector restart.
+                        self._attach_browser(browser)
+                        contexts = browser.contexts
+                        open_pages = [
+                            page
+                            for context in contexts
+                            for page in context.pages
+                            if not page.is_closed()
+                        ]
+                        if not open_pages:
+                            transient_errors = 0
+                            sleep(0.25)
+                            continue
+
+                        now = monotonic()
+                        last_scan = getattr(self, "_last_dom_scan_at", 0.0)
+                        if now - last_scan >= 0.75:
+                            self._last_dom_scan_at = now
+                            for page in open_pages:
+                                try:
+                                    frames = tuple(page.frames)
+                                except Exception as exc:
+                                    transient_errors += 1
+                                    logger.warning(
+                                        "Page frame enumeration failed transiently (%s); continuing.",
+                                        type(exc).__name__,
+                                    )
+                                    continue
+                                for frame in frames:
+                                    self._record_visible_multipliers(frame)
+
                         last_heartbeat = getattr(self, "_last_heartbeat_at", 0.0)
                         if now - last_heartbeat >= 2.0:
                             self._last_heartbeat_at = now
                             self._write_heartbeat()
-                    # A Playwright wait keeps protocol events pumping while remaining read-only.
-                    open_pages[0].wait_for_timeout(250)
+
+                        # This keeps Playwright protocol events pumping. A page may
+                        # disappear between enumeration and this call; treat that as
+                        # transient while the browser connection itself is healthy.
+                        try:
+                            open_pages[0].wait_for_timeout(250)
+                        except Exception as exc:
+                            transient_errors += 1
+                            logger.warning(
+                                "Active page changed during collector wait (%s); retrying.",
+                                type(exc).__name__,
+                            )
+                            sleep(0.10)
+                            continue
+
+                        transient_errors = 0
+                    except RuntimeError:
+                        raise
+                    except Exception as exc:
+                        if not browser.is_connected():
+                            raise RuntimeError("Local Edge CDP connection was lost.") from exc
+                        transient_errors += 1
+                        logger.warning(
+                            "Transient browser observation error (%s); collector remains attached.",
+                            type(exc).__name__,
+                        )
+                        sleep(0.25)
             finally:
                 for session in tuple(self._cdp_sessions):
                     try:
