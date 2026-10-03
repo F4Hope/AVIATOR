@@ -2,7 +2,7 @@
 
 from decimal import Decimal
 
-from prediction.adaptive import AdaptiveConfig, predict_next_multiplier
+from prediction.adaptive import AdaptiveConfig, _fit_ridge, predict_next_multiplier
 
 
 def _series(repeats: int = 12) -> list[str]:
@@ -55,3 +55,14 @@ def test_recent_regime_shift_is_reported() -> None:
     assert result.regime == "HIGHER_RECENT_MULTIPLIERS"
     assert result.regime_shift is not None
     assert result.regime_shift > 0
+
+
+
+def test_pure_python_ridge_fits_simple_linear_relation() -> None:
+    model = _fit_ridge(
+        [[0.0], [1.0], [2.0], [3.0]],
+        [1.0, 3.0, 5.0, 7.0],
+        1e-9,
+    )
+    predicted = model.predict([[4.0]])[0]
+    assert abs(predicted - 9.0) < 1e-6
