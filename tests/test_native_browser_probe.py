@@ -113,3 +113,26 @@ def test_native_probe_writes_session_heartbeat(tmp_path: Path) -> None:
     assert value["kind"] == "dom_probe_heartbeat"
     assert value["collector_session_id"] == probe.collector_session_id
     assert value["observed_at"].endswith("Z")
+    assert value["capture_ready"] is True
+    assert value["network_probe_writable"] is True
+    assert value["dom_probe_writable"] is True
+
+
+def test_native_probe_heartbeat_reports_capacity_exhaustion(tmp_path: Path) -> None:
+    import json
+
+    heartbeat = tmp_path / "heartbeat.json"
+    output = tmp_path / "probe.jsonl"
+    output.write_bytes(b"x" * 20)
+    probe = NativeBrowserProbe(
+        NativeBrowserProbeConfig(
+            target_url="https://example.test/aviator",
+            output_path=output,
+            heartbeat_path=heartbeat,
+        )
+    )
+    probe.writer.max_bytes = 20
+    probe._write_heartbeat()
+    value = json.loads(heartbeat.read_text(encoding="utf-8"))
+    assert value["capture_ready"] is False
+    assert value["network_probe_writable"] is False
