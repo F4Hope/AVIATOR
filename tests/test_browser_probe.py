@@ -110,3 +110,25 @@ def test_probe_summary_ranks_candidate_paths(tmp_path: Path) -> None:
     assert {path for path, _ in result[0].candidate_paths} == {
         "game.round_id", "game.multiplier"
     }
+
+
+
+def test_probe_summary_includes_http_status_counts(tmp_path: Path) -> None:
+    path = tmp_path / "probe.jsonl"
+    writer = ProbeWriter(path, max_bytes=4096)
+    writer.append({
+        "kind": "response",
+        "url": "https://example.test/game",
+        "status": 200,
+        "resource_type": "xhr",
+        "content_type": "application/json",
+    })
+    writer.append({
+        "kind": "response",
+        "url": "https://example.test/game",
+        "status": 403,
+        "resource_type": "xhr",
+        "content_type": "application/json",
+    })
+    result = summarize_probe(path)
+    assert result[0].status_counts == ((200, 1), (403, 1))

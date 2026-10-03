@@ -37,6 +37,10 @@ def main(argv: list[str] | None = None) -> int:
             f"\n[{index}] kind={candidate.kind} events={candidate.events}\n"
             f"url={candidate.url}"
         )
+        if candidate.status_counts:
+            print("status_counts:")
+            for status, count in candidate.status_counts:
+                print(f"  {status}: {count}")
         if candidate.candidate_paths:
             print("candidate_paths:")
             for path, count in candidate.candidate_paths[:20]:
