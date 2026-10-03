@@ -96,6 +96,51 @@ def _outstanding_lock(events: list[dict[str, object]]) -> dict[str, object] | No
     return None
 
 
+def _latest_arm(
+    events: list[dict[str, object]],
+    collector_session_id: str,
+) -> dict[str, object] | None:
+    for event in reversed(events):
+        if (
+            event.get("event") == "prediction_armed"
+            and event.get("collector_session_id") == collector_session_id
+        ):
+            return event
+    return None
+
+
+def arm_prediction_session(
+    settings: Settings,
+    dom_path: Path,
+    ledger_path: Path,
+    collector_session_id: str,
+) -> dict[str, object] | None:
+    """Synchronize known results, then require one fresh completion before a new lock."""
+    if not isinstance(collector_session_id, str) or not collector_session_id.strip():
+        raise ValueError("collector_session_id must be a nonempty string.")
+
+    events = _load_ledger(ledger_path)
+    if _outstanding_lock(events) is not None:
+        return None
+
+    # Bring the database current before establishing the continuity boundary.
+    # Any result already visible at re-arm time is therefore excluded from being
+    # treated as the fresh completion that authorizes the next prediction lock.
+    ingest_dom_rounds(dom_path, settings)
+    rounds = _load_rounds(settings)
+    last = rounds[-1] if rounds else None
+    event = {
+        "event": "prediction_armed",
+        "armed_at": _utc_now_text(),
+        "collector_session_id": collector_session_id,
+        "history_count": len(rounds),
+        "history_last_round_id": last.round_id if last is not None else None,
+        "reason": "await_fresh_completed_round_before_next_lock",
+    }
+    _append_ledger(ledger_path, event)
+    return event
+
+
 def invalidate_outstanding_lock(
     ledger_path: Path,
     reason: str = "collector_liveness_lost",
@@ -232,6 +277,22 @@ def process_live_prediction_cycle(
     outstanding = _outstanding_lock(events)
 
     if outstanding is None:
+        if collector_session_id is not None:
+            arm = _latest_arm(events, collector_session_id)
+            if arm is None:
+                arm = arm_prediction_session(
+                    settings, dom_path, ledger_path, collector_session_id
+                )
+                if arm is not None:
+                    emitted.append(arm)
+                return tuple(emitted)
+
+            arm_history_count = arm.get("history_count")
+            if not isinstance(arm_history_count, int) or arm_history_count < 0:
+                raise ValueError("Prediction arm history metadata is invalid.")
+            if len(rounds) <= arm_history_count:
+                return tuple(emitted)
+
         if rounds:
             lock = _prediction_lock(rounds, config, collector_session_id)
             _append_ledger(ledger_path, lock)
