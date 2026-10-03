@@ -52,7 +52,36 @@ try {
 
     Write-Host "Attaching AIE to the already-running Edge session..." -ForegroundColor Cyan
     Write-Host "Watch the Aviator page while this attaches." -ForegroundColor Yellow
-    & $python probe_aviator_native.py --cdp-url http://127.0.0.1:9222
+    Write-Host "Collector supervisor: ENABLED" -ForegroundColor DarkGray
+
+    $restartCount = 0
+    while ($true) {
+        & $python probe_aviator_native.py --cdp-url http://127.0.0.1:9222
+        $exitCode = $LASTEXITCODE
+
+        if ($exitCode -eq 0) {
+            Write-Host "Collector stopped normally." -ForegroundColor DarkGray
+            break
+        }
+
+        $restartCount += 1
+        Write-Warning "Collector exited unexpectedly with code $exitCode. Reattach attempt $restartCount will begin shortly."
+
+        try {
+            $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:9222/json/version" -TimeoutSec 3
+            if ($response.StatusCode -ne 200) {
+                throw "unexpected status"
+            }
+        }
+        catch {
+            Write-Warning "Edge CDP is not currently reachable. Waiting before retry."
+            Start-Sleep -Seconds 2
+            continue
+        }
+
+        Start-Sleep -Seconds 2
+        Write-Host "Reattaching collector to the existing Edge session..." -ForegroundColor Yellow
+    }
 }
 finally {
     Pop-Location
