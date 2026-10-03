@@ -1,45 +1,45 @@
-"""Launch a local persistent Edge/Chrome session and observe sanitized Aviator traffic."""
+"""Attach to a normal local Edge/Chrome CDP session and observe sanitized traffic."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
-from pathlib import Path
 from threading import Event
 from time import sleep
 
-from playwright.sync_api import BrowserContext, Page, Response, WebSocket, sync_playwright
+from playwright.sync_api import Browser, Page, Response, WebSocket, sync_playwright
 
 from collectors.network_probe import ProbeWriter, payload_metadata, safe_url
 
 
 logger = logging.getLogger("aie.collectors.native_browser_probe")
-SUPPORTED_CHANNELS = ("msedge", "chrome")
 
 
 @dataclass(frozen=True, slots=True)
 class NativeBrowserProbeConfig:
     target_url: str
-    output_path: Path
-    profile_dir: Path
-    browser_channel: str = "msedge"
+    output_path: object
+    cdp_url: str = "http://127.0.0.1:9222"
 
     def __post_init__(self) -> None:
+        from pathlib import Path
+
         if not self.target_url.startswith("https://"):
             raise ValueError("target_url must use https://.")
-        if self.browser_channel not in SUPPORTED_CHANNELS:
-            raise ValueError("browser_channel must be msedge or chrome.")
-        if self.output_path.suffix.lower() != ".jsonl":
-            raise ValueError("output_path must end in .jsonl.")
+        if not self.cdp_url.startswith(("http://127.0.0.1:", "http://localhost:")):
+            raise ValueError("cdp_url must be a localhost HTTP endpoint.")
+        if not isinstance(self.output_path, Path) or self.output_path.suffix.lower() != ".jsonl":
+            raise ValueError("output_path must be a .jsonl Path.")
 
 
 class NativeBrowserProbe:
-    """Observe a local persistent browser without saving credentials or raw values."""
+    """Observe a normal local browser without persisting credentials or raw values."""
 
     def __init__(self, config: NativeBrowserProbeConfig) -> None:
         self.config = config
         self.writer = ProbeWriter(config.output_path)
         self.stop_event = Event()
+        self._attached_pages: set[int] = set()
 
     def _record_response(self, response: Response) -> None:
         try:
@@ -95,42 +95,43 @@ class NativeBrowserProbe:
         socket.on("framereceived", received)
         socket.on("framesent", sent)
 
-    def _prepare_page(self, context: BrowserContext) -> Page:
-        page = context.pages[0] if context.pages else context.new_page()
+    def _attach_page(self, page: Page) -> None:
+        identity = id(page)
+        if identity in self._attached_pages:
+            return
+        self._attached_pages.add(identity)
         page.on("response", self._record_response)
         page.on("websocket", self._record_websocket)
-        page.goto(self.config.target_url, wait_until="domcontentloaded", timeout=60_000)
-        self.writer.append({
-            "kind": "page_ready",
-            "url": safe_url(page.url),
-            "title_length": len(page.title()),
-        })
-        return page
+        try:
+            self.writer.append({
+                "kind": "page_attached",
+                "url": safe_url(page.url),
+                "title_length": len(page.title()) if page.url else 0,
+            })
+        except Exception:
+            logger.debug("Page metadata observation skipped.", exc_info=False)
+
+    def _attach_browser(self, browser: Browser) -> None:
+        if not browser.contexts:
+            raise RuntimeError("Local Edge returned no browser context.")
+        for context in browser.contexts:
+            context.on("page", self._attach_page)
+            for page in context.pages:
+                self._attach_page(page)
 
     def run(self) -> None:
-        """Launch a visible persistent browser and observe it until stopped."""
-        self.config.profile_dir.mkdir(parents=True, exist_ok=True)
+        """Attach to the existing local browser and observe until stopped."""
         with sync_playwright() as playwright:
-            context = playwright.chromium.launch_persistent_context(
-                user_data_dir=str(self.config.profile_dir),
-                channel=self.config.browser_channel,
-                headless=False,
-            )
+            browser = playwright.chromium.connect_over_cdp(self.config.cdp_url, timeout=30_000)
             try:
-                page = self._prepare_page(context)
-                logger.info(
-                    "Native browser probe running in %s; use the opened browser manually.",
-                    self.config.browser_channel,
-                )
+                self._attach_browser(browser)
+                logger.info("Native probe attached to local Edge over CDP.")
                 while not self.stop_event.is_set():
-                    if page.is_closed():
-                        open_pages = [candidate for candidate in context.pages if not candidate.is_closed()]
-                        if not open_pages:
-                            raise RuntimeError("Observed browser was closed.")
-                        page = open_pages[0]
+                    if not any(context.pages for context in browser.contexts):
+                        raise RuntimeError("No open browser pages remain.")
                     sleep(1)
             finally:
-                context.close()
+                browser.close()
 
     def stop(self) -> None:
         self.stop_event.set()
