@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 import sys
 
-from collectors.probe_analysis import summarize_live_transports, summarize_probe
+from collectors.probe_analysis import summarize_binary_frame_classes, summarize_live_transports, summarize_probe
 from config.settings import DEVELOPMENT_PHASE, load_settings
 
 
@@ -23,6 +23,7 @@ def main(argv: list[str] | None = None) -> int:
         settings = load_settings()
         probe_path = settings.raw_data_dir / args.input
         live_candidates = summarize_live_transports(probe_path)
+        frame_classes = summarize_binary_frame_classes(probe_path)
         candidates = summarize_probe(probe_path)
     except (OSError, ValueError):
         print("Probe inspection failed. Check the probe filename and configuration.", file=sys.stderr)
@@ -33,7 +34,8 @@ def main(argv: list[str] | None = None) -> int:
         f"Phase: {DEVELOPMENT_PHASE}\n"
         "Probe inspection: COMPLETE\n"
         f"Observed groups: {len(candidates)}\n"
-        f"Live transport candidates: {len(live_candidates)}"
+        f"Live transport candidates: {len(live_candidates)}\n"
+        f"Binary frame classes: {len(frame_classes)}"
     )
 
     if live_candidates:
@@ -68,6 +70,22 @@ def main(argv: list[str] | None = None) -> int:
                 print("candidate_paths:")
                 for path, count in candidate.candidate_paths[:20]:
                     print(f"  {path} ({count})")
+    if frame_classes:
+        print("\nBINARY FRAME CLASSES")
+        for index, frame_class in enumerate(frame_classes[:15], start=1):
+            print(
+                f"\n[B{index}] events={frame_class.events} direction={frame_class.direction} "
+                f"size={frame_class.size_bucket}\n"
+                f"url={frame_class.url}\n"
+                f"timing_ms: median={frame_class.median_gap_ms} "
+                f"min={frame_class.min_gap_ms} max={frame_class.max_gap_ms} "
+                f"periodicity={frame_class.periodicity_score}\n"
+                f"fingerprint_mode: entropy={frame_class.entropy_mode} "
+                f"zero={frame_class.zero_ratio_mode} "
+                f"high_bit={frame_class.high_bit_ratio_mode} "
+                f"unique={frame_class.unique_byte_mode}"
+            )
+
     for index, candidate in enumerate(candidates[: args.limit], start=1):
         print(
             f"\n[{index}] kind={candidate.kind} events={candidate.events}\n"
