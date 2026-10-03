@@ -7,7 +7,7 @@ import pytest
 
 from collectors.browser_probe import BrowserProbeConfig
 from collectors.network_probe import ProbeWriter, binary_fingerprint, json_shape, payload_metadata, safe_url
-from collectors.probe_analysis import summarize_binary_frame_classes, summarize_live_transports, summarize_probe
+from collectors.probe_analysis import summarize_binary_frame_classes, summarize_live_transports, summarize_marker_correlations, summarize_probe
 
 
 def test_safe_url_removes_query_and_fragment() -> None:
@@ -270,3 +270,48 @@ def test_binary_frame_structure_discovery_ignores_nonbinary(tmp_path: Path) -> N
         "payload": {"format": "text", "bytes": 5},
     })
     assert summarize_binary_frame_classes(path) == ()
+
+
+
+def test_marker_correlation_counts_nearby_binary_classes(tmp_path: Path) -> None:
+    probe = tmp_path / "probe.jsonl"
+    markers = tmp_path / "markers.jsonl"
+
+    probe_rows = [
+        {
+            "observed_at": "2026-10-03T00:00:00.500000Z",
+            "kind": "cdp_websocket_received",
+            "url": "cdp://websocket/test",
+            "opcode": 2,
+            "payload": payload_metadata(b"\x00\x01\x02\x03" * 20),
+        },
+        {
+            "observed_at": "2026-10-03T00:00:10.000000Z",
+            "kind": "cdp_websocket_received",
+            "url": "cdp://websocket/test",
+            "opcode": 2,
+            "payload": payload_metadata(b"\x00\x01\x02\x03" * 40),
+        },
+    ]
+    marker_rows = [
+        {
+            "observed_at": "2026-10-03T00:00:00.000000Z",
+            "kind": "visual_marker",
+            "event": "round_start",
+        }
+    ]
+    probe.write_text("\n".join(json.dumps(row) for row in probe_rows) + "\n", encoding="utf-8")
+    markers.write_text("\n".join(json.dumps(row) for row in marker_rows) + "\n", encoding="utf-8")
+
+    result = summarize_marker_correlations(probe, markers, window_seconds=1.0)
+    assert len(result) == 1
+    assert result[0].event == "round_start"
+    assert result[0].markers == 1
+    assert result[0].nearby_classes[0][1] == "received:64-127"
+    assert result[0].nearby_classes[0][2] == 1
+
+
+def test_marker_correlation_returns_empty_without_marker_file(tmp_path: Path) -> None:
+    probe = tmp_path / "probe.jsonl"
+    probe.write_text("", encoding="utf-8")
+    assert summarize_marker_correlations(probe, tmp_path / "missing.jsonl") == ()
