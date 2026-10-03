@@ -80,3 +80,19 @@ def test_native_bootstrap_installs_python_not_docker() -> None:
 def test_native_browser_profile_is_ignored() -> None:
     content = (ROOT / ".gitignore").read_text(encoding="utf-8")
     assert "data/browser-profile/" in content
+
+
+
+def test_deferred_native_launch_does_not_attach_collector() -> None:
+    content = (ROOT / "deploy/windows/launch-native-browser.ps1").read_text(encoding="utf-8")
+    assert "--remote-debugging-address=127.0.0.1" in content
+    assert "--remote-debugging-port=9222" in content
+    assert "probe_aviator_native.py" not in content
+    assert "attach-native-collector.ps1" in content
+
+
+def test_deferred_native_attach_requires_local_debug_endpoint() -> None:
+    content = (ROOT / "deploy/windows/attach-native-collector.ps1").read_text(encoding="utf-8")
+    assert "http://127.0.0.1:9222/json/version" in content
+    assert "probe_aviator_native.py --cdp-url http://127.0.0.1:9222" in content
+    assert "0.0.0.0:9222" not in content
