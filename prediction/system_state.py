@@ -412,3 +412,101 @@ def build_prestart_system_state_samples(
         )
 
     return tuple(result)
+
+
+
+def build_causal_checkpoint_system_state_samples(
+    rounds: Sequence[ObservedRound],
+    events: Sequence[SystemProbeEvent],
+    starts: Sequence[InferredRoundStart],
+    *,
+    checkpoint_seconds: float,
+    trailing_windows_seconds: Sequence[float] = (0.75, 2.0, 5.0),
+    min_interval_events: int = 3,
+    history_config: FeatureConfig | None = None,
+) -> tuple[SystemStateSample, ...]:
+    """Build operationally causal samples at a fixed delay after N-1 completes.
+
+    The cutoff is previous_completed_at + checkpoint_seconds. A target is eligible
+    only when the observed next-round start occurs strictly after that checkpoint.
+    In live operation this is realizable: wait the fixed delay, and if the round
+    has not started, compute the prediction from events already observed.
+    """
+    if checkpoint_seconds <= 0:
+        raise ValueError("checkpoint_seconds must be positive.")
+    if (
+        not trailing_windows_seconds
+        or any(window <= 0 for window in trailing_windows_seconds)
+    ):
+        raise ValueError("trailing_windows_seconds must contain positive values.")
+    if type(min_interval_events) is not int or min_interval_events < 1:
+        raise ValueError("min_interval_events must be positive.")
+
+    active_history = history_config if history_config is not None else FeatureConfig()
+    round_values = [round_.multiplier for round_ in rounds]
+    event_times = [event.timestamp for event in events]
+    start_by_target = {start.target_completed_at: start for start in starts}
+    windows = tuple(sorted(float(window) for window in trailing_windows_seconds))
+    result: list[SystemStateSample] = []
+
+    for target_index in range(max(1, active_history.warmup), len(rounds)):
+        target = rounds[target_index]
+        previous = rounds[target_index - 1]
+        start = start_by_target.get(target.timestamp)
+        if start is None or start.previous_completed_at != previous.timestamp:
+            continue
+
+        previous_ts = _parse_timestamp(previous.timestamp)
+        target_ts = _parse_timestamp(target.timestamp)
+        start_ts = _parse_timestamp(start.start_observed_at)
+        if previous_ts is None or target_ts is None or start_ts is None:
+            continue
+
+        cutoff = previous_ts + checkpoint_seconds
+        if not (previous_ts < cutoff < start_ts < target_ts):
+            continue
+
+        interval_left = bisect_right(event_times, previous_ts)
+        interval_right = bisect_right(event_times, cutoff)
+        interval_events = events[interval_left:interval_right]
+        if len(interval_events) < min_interval_events:
+            continue
+
+        trailing_features: list[tuple[float, ...]] = []
+        for window in windows:
+            left = bisect_right(event_times, cutoff - window)
+            trailing_features.append(_window_features(events[left:interval_right]))
+
+        history = round_values[:target_index]
+        recent = history[-8:]
+        baseline = Decimal(str(median(float(value) for value in recent)))
+        state_features = (
+            math.log1p(checkpoint_seconds),
+            *_window_features(interval_events),
+            *(
+                value
+                for window_values in trailing_features
+                for value in window_values
+            ),
+        )
+        cutoff_text = datetime.fromtimestamp(
+            cutoff,
+            tz=datetime.fromisoformat(
+                previous.timestamp.replace("Z", "+00:00")
+            ).tzinfo,
+        ).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+        result.append(
+            SystemStateSample(
+                target_index=target_index,
+                cutoff_timestamp=cutoff_text,
+                target_timestamp=target.timestamp,
+                actual_multiplier=target.multiplier,
+                baseline_recent_median=baseline,
+                state_features=tuple(state_features),
+                history_features=feature_vector(history, active_history),
+                longest_window_events=len(interval_events),
+            )
+        )
+
+    return tuple(result)
