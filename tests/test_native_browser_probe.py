@@ -3,7 +3,7 @@
 from pathlib import Path
 import pytest
 
-from collectors.native_browser_probe import NativeBrowserProbeConfig, _cdp_frame_payload, _socket_id
+from collectors.native_browser_probe import NativeBrowserProbeConfig, _cdp_frame_payload, _normalize_dom_candidates, _socket_id
 
 
 def test_native_probe_config_accepts_local_cdp(tmp_path: Path) -> None:
@@ -55,3 +55,33 @@ def test_cdp_frame_payload_preserves_text_shape() -> None:
 def test_cdp_frame_payload_decodes_binary_base64() -> None:
     payload = _cdp_frame_payload({"opcode": 2, "payloadData": "aGVsbG8="})
     assert payload == b"hello"
+
+
+
+def test_dom_candidate_normalization_keeps_only_multiplier_text() -> None:
+    raw = [
+        {"text": "4.97x", "x": 913.2, "y": 21.4, "w": 45.0, "h": 19.0},
+        {"text": "Balance 1000", "x": 0, "y": 0, "w": 50, "h": 10},
+        {"text": "1.00X", "x": 400, "y": 60, "w": 30, "h": 15},
+    ]
+    result = _normalize_dom_candidates(raw)
+    assert [item["multiplier"] for item in result] == ["4.97", "1.00"]
+    assert result[0]["x_bucket"] == 910
+    assert result[0]["y_bucket"] == 20
+
+
+def test_dom_candidate_normalization_rejects_out_of_range_values() -> None:
+    raw = [
+        {"text": "0.99x", "x": 1, "y": 1, "w": 10, "h": 10},
+        {"text": "1000001x", "x": 1, "y": 1, "w": 10, "h": 10},
+    ]
+    assert _normalize_dom_candidates(raw) == ()
+
+
+def test_native_probe_config_accepts_dom_jsonl_output(tmp_path: Path) -> None:
+    config = NativeBrowserProbeConfig(
+        target_url="https://example.test/aviator",
+        output_path=tmp_path / "probe.jsonl",
+        dom_output_path=tmp_path / "dom.jsonl",
+    )
+    assert config.dom_output_path == tmp_path / "dom.jsonl"
