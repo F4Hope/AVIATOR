@@ -849,3 +849,146 @@ def summarize_marker_signature_stats(
             reverse=True,
         )
     )
+
+
+@dataclass(frozen=True, slots=True)
+class DomCompletedRound:
+    observed_at: str
+    multiplier: str
+    edge: str
+    overlap: int
+    history_size: int
+    y_bucket: int
+
+
+def _dom_history_row(candidates: object) -> tuple[int, tuple[str, ...]] | None:
+    """Return the densest compact horizontal multiplier row from one DOM snapshot."""
+    if not isinstance(candidates, list):
+        return None
+
+    rows: dict[int, list[tuple[int, str]]] = defaultdict(list)
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        multiplier = item.get("multiplier")
+        x = item.get("x_bucket")
+        y = item.get("y_bucket")
+        width = item.get("width_bucket")
+        height = item.get("height_bucket")
+        if (
+            not isinstance(multiplier, str)
+            or not isinstance(x, int)
+            or not isinstance(y, int)
+            or not isinstance(width, int)
+            or not isinstance(height, int)
+        ):
+            continue
+        # The completed-history chips form a dense compact row. Wider 120px
+        # values in observed captures belong to a different scrolling region.
+        if width > 70 or height > 40:
+            continue
+        rows[y].append((x, multiplier))
+
+    if not rows:
+        return None
+
+    y_bucket, values = max(rows.items(), key=lambda pair: (len(pair[1]), -abs(pair[0])))
+    if len(values) < 5:
+        return None
+    ordered = tuple(value for _, value in sorted(values))
+    return y_bucket, ordered
+
+
+def _sequence_overlap_after_left_insert(previous: tuple[str, ...], current: tuple[str, ...]) -> int:
+    limit = min(len(previous), max(0, len(current) - 1))
+    count = 0
+    for index in range(limit):
+        if current[index + 1] != previous[index]:
+            break
+        count += 1
+    return count
+
+
+def _sequence_overlap_after_right_insert(previous: tuple[str, ...], current: tuple[str, ...]) -> int:
+    limit = min(max(0, len(previous) - 1), len(current))
+    count = 0
+    for index in range(1, limit + 1):
+        if current[-index - 1] != previous[-index]:
+            break
+        count += 1
+    return count
+
+
+def extract_dom_completed_rounds(
+    dom_path: Path,
+    min_overlap: int = 5,
+) -> tuple[DomCompletedRound, ...]:
+    """Infer completed outcomes when the visible history strip inserts one new value.
+
+    This is deliberately post-round extraction only. The function never treats
+    transient live multiplier values as a completed result.
+    """
+    if not dom_path.is_file():
+        return ()
+    if min_overlap < 2:
+        raise ValueError("min_overlap must be at least 2.")
+
+    result: list[DomCompletedRound] = []
+    previous_row: tuple[str, ...] | None = None
+    previous_y: int | None = None
+    last_event_identity: tuple[str, str] | None = None
+
+    with dom_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict) or event.get("kind") != "dom_multiplier_snapshot":
+                continue
+            observed_at = event.get("observed_at")
+            if not isinstance(observed_at, str):
+                continue
+            row = _dom_history_row(event.get("candidates"))
+            if row is None:
+                continue
+            y_bucket, current_row = row
+
+            if previous_row is not None and previous_y is not None and abs(y_bucket - previous_y) <= 20:
+                left_overlap = _sequence_overlap_after_left_insert(previous_row, current_row)
+                right_overlap = _sequence_overlap_after_right_insert(previous_row, current_row)
+
+                if left_overlap >= min_overlap and current_row:
+                    identity = (observed_at, current_row[0])
+                    if identity != last_event_identity:
+                        result.append(
+                            DomCompletedRound(
+                                observed_at=observed_at,
+                                multiplier=current_row[0],
+                                edge="left",
+                                overlap=left_overlap,
+                                history_size=len(current_row),
+                                y_bucket=y_bucket,
+                            )
+                        )
+                        last_event_identity = identity
+                elif right_overlap >= min_overlap and current_row:
+                    identity = (observed_at, current_row[-1])
+                    if identity != last_event_identity:
+                        result.append(
+                            DomCompletedRound(
+                                observed_at=observed_at,
+                                multiplier=current_row[-1],
+                                edge="right",
+                                overlap=right_overlap,
+                                history_size=len(current_row),
+                                y_bucket=y_bucket,
+                            )
+                        )
+                        last_event_identity = identity
+
+            if previous_row != current_row:
+                previous_row = current_row
+                previous_y = y_bucket
+
+    return tuple(result)
