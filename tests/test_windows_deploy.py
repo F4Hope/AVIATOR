@@ -59,3 +59,24 @@ def test_windows_bootstrap_never_embeds_account_secrets() -> None:
     assert "password=" not in content
     assert "betpawa_pin" not in content
     assert "api_token=" not in content
+
+
+
+def test_native_windows_setup_has_no_docker_dependency() -> None:
+    content = (ROOT / "deploy/windows/setup-native-aie.ps1").read_text(encoding="utf-8").lower()
+    assert "docker" not in content
+    assert "tailscale serve --bg --yes --https=443" in content
+    assert "run_dashboard.py --host 127.0.0.1" in content
+
+
+def test_native_bootstrap_installs_python_not_docker() -> None:
+    content = (ROOT / "deploy/windows/bootstrap-native-host.ps1").read_text(encoding="utf-8")
+    assert 'WingetId "Python.Python.3.12"' in content
+    assert 'WingetId "Tailscale.Tailscale"' in content
+    assert "Docker.DockerDesktop" not in content
+    assert ".\\deploy\\windows\\setup-native-aie.ps1" in content
+
+
+def test_native_browser_profile_is_ignored() -> None:
+    content = (ROOT / ".gitignore").read_text(encoding="utf-8")
+    assert "data/browser-profile/" in content
