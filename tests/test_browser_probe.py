@@ -59,10 +59,18 @@ def test_probe_writer_appends_sanitized_jsonl(tmp_path: Path) -> None:
 def test_probe_writer_enforces_budget(tmp_path: Path) -> None:
     path = tmp_path / "probe.jsonl"
     writer = ProbeWriter(path, max_bytes=100)
+    assert writer.can_append() is True
     assert writer.append({"kind": "small"}) is True
     before = path.read_bytes()
     assert writer.append({"kind": "large", "value": "x" * 500}) is False
     assert path.read_bytes() == before
+
+
+def test_probe_writer_reports_not_writable_at_capacity(tmp_path: Path) -> None:
+    path = tmp_path / "probe.jsonl"
+    path.write_bytes(b"x" * 100)
+    writer = ProbeWriter(path, max_bytes=100)
+    assert writer.can_append() is False
 
 
 @pytest.mark.parametrize(
