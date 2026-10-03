@@ -57,7 +57,7 @@ def test_loader_pairs_locked_features_with_later_scores() -> None:
         positive = index % 2 == 0
         events.extend((_lock(index, positive), _score(index, positive)))
 
-    samples = load_prospective_feature_samples(events)
+    samples = load_prospective_feature_samples(events, hash_bins=8)
 
     assert len(samples) == 12
     assert len(samples[0].features) > 20
@@ -70,7 +70,7 @@ def test_walk_forward_feature_model_can_detect_synthetic_signal() -> None:
         positive = index % 2 == 0
         events.extend((_lock(index, positive), _score(index, positive)))
 
-    samples = load_prospective_feature_samples(events)
+    samples = load_prospective_feature_samples(events, hash_bins=8)
     report = walk_forward_prospective_feature_audit(
         samples,
         min_training_samples=30,
