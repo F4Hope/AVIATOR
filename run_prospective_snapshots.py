@@ -178,6 +178,35 @@ def _eof(path: Path) -> int:
         return 0
 
 
+def _discover_recent_trigger_signatures(
+    settings,
+    *,
+    recent_starts: int = 48,
+):
+    """Learn trigger timing signatures from only already-completed recent rounds."""
+    dom_paths = discover_dom_probe_paths(settings.raw_data_dir)
+    network_paths = discover_network_probe_paths(settings.raw_data_dir)
+    completed = load_completed_round_boundaries(dom_paths)
+    live = load_live_multiplier_observations(dom_paths)
+    starts = infer_round_starts(completed, live)
+    if len(starts) < 3:
+        return (), len(starts)
+    selected = starts[-recent_starts:] if len(starts) > recent_starts else starts
+    events = load_system_probe_events(network_paths)
+    discovery = discover_prestart_trigger_signatures(
+        selected,
+        events,
+        discovery_fraction=0.80,
+        lookback_seconds=2.5,
+        minimum_lead_seconds=0.20,
+        minimum_hit_starts=3,
+        minimum_hit_rate=0.10,
+        minimum_enrichment=1.25,
+        max_signatures=16,
+    )
+    return discovery.signatures, len(selected)
+
+
 def _record_boundary_and_instant_forecast(
     ledger_path: Path,
     collector_session_id: str,
@@ -319,6 +348,13 @@ def _print_event(event: dict[str, object]) -> None:
             f"Actual: {event['actual_multiplier']}x\n"
             "No frozen trigger fired before the next completed observation."
         )
+    elif kind == "trigger_regime_refreshed":
+        print(
+            "\nTRIGGER REGIME REFRESHED\n"
+            f"Recent completed starts used: {event['training_starts']}\n"
+            f"New frozen signatures: {event['signature_count']}\n"
+            "Refresh used completed rounds only; future results were unavailable."
+        )
     elif kind == "pre_round_snapshot_invalidated":
         print(
             "\nPRE-ROUND SNAPSHOT INVALIDATED\n"
@@ -368,24 +404,10 @@ def main(argv: list[str] | None = None) -> int:
         heartbeat_path = settings.raw_data_dir / args.heartbeat
         ledger_path = settings.processed_data_dir / args.ledger
 
-        historical_dom_paths = discover_dom_probe_paths(settings.raw_data_dir)
-        historical_network_paths = discover_network_probe_paths(settings.raw_data_dir)
-        completed = load_completed_round_boundaries(historical_dom_paths)
-        live = load_live_multiplier_observations(historical_dom_paths)
-        starts = infer_round_starts(completed, live)
-        historical_events = load_system_probe_events(historical_network_paths)
-        discovery = discover_prestart_trigger_signatures(
-            starts,
-            historical_events,
-            discovery_fraction=0.80,
-            lookback_seconds=2.5,
-            minimum_lead_seconds=0.20,
-            minimum_hit_starts=4,
-            minimum_hit_rate=0.12,
-            minimum_enrichment=1.5,
-            max_signatures=16,
+        frozen, trigger_training_starts = _discover_recent_trigger_signatures(
+            settings,
+            recent_starts=48,
         )
-        frozen = discovery.signatures
         if not frozen:
             print(
                 "Prospective capture cannot start: no frozen historical trigger signatures.",
@@ -399,6 +421,8 @@ def main(argv: list[str] | None = None) -> int:
             f"Phase: {DEVELOPMENT_PHASE}\n"
             "Prospective PRE-ROUND capture: RUNNING\n"
             f"Frozen trigger signatures: {len(frozen)}\n"
+            f"Recent completed starts used for trigger timing: "
+            f"{trigger_training_starts}\n"
             f"Snapshot ledger: {ledger_path}\n"
             "Data policy: trigger-time metadata only; outcome appended later."
         )
@@ -408,6 +432,7 @@ def main(argv: list[str] | None = None) -> int:
         previous_round: SnapshotRound | None = None
         interval_events: list[SystemProbeEvent] = []
         network_offset = _eof(network_path)
+        consecutive_trigger_misses = 0
 
         while True:
             session = _heartbeat_session(heartbeat_path, args.max_heartbeat_age)
@@ -471,6 +496,7 @@ def main(argv: list[str] | None = None) -> int:
                     score = score_pre_round_snapshot(outstanding, actual)
                     append_snapshot_event(ledger_path, score)
                     _print_event(score)
+                    consecutive_trigger_misses = 0
 
                     extra = len(rounds) - (previous_index + 2)
                     if extra > 0:
@@ -547,8 +573,39 @@ def main(argv: list[str] | None = None) -> int:
                             previous_round,
                             rounds,
                         )
+                        # Establish the new round's byte boundary before any
+                        # potentially expensive regime refresh. Events appended
+                        # during refresh remain readable on the next loop.
                         interval_events.clear()
                         network_offset = _eof(network_path)
+                        consecutive_trigger_misses += 1
+                        if consecutive_trigger_misses >= 8:
+                            refreshed, training_starts = (
+                                _discover_recent_trigger_signatures(
+                                    settings,
+                                    recent_starts=48,
+                                )
+                            )
+                            if refreshed:
+                                frozen = refreshed
+                                frozen_scores = {
+                                    item.signature: item.score
+                                    for item in frozen
+                                }
+                                refresh_event = {
+                                    "event": "trigger_regime_refreshed",
+                                    "observed_at": utc_text(),
+                                    "collector_session_id": session,
+                                    "training_starts": training_starts,
+                                    "signature_count": len(frozen),
+                                    "reason": "consecutive_trigger_misses",
+                                }
+                                append_snapshot_event(
+                                    ledger_path,
+                                    refresh_event,
+                                )
+                                _print_event(refresh_event)
+                            consecutive_trigger_misses = 0
 
             new_events, network_offset = _read_new_network_events(
                 network_path, network_offset
@@ -598,6 +655,7 @@ def main(argv: list[str] | None = None) -> int:
                             snapshot = attach_forecast(snapshot, forecast)
                             append_snapshot_event(ledger_path, snapshot)
                             _print_event(snapshot)
+                            consecutive_trigger_misses = 0
                             break
 
             time.sleep(args.poll_seconds)
