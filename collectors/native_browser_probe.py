@@ -7,8 +7,9 @@ from dataclasses import dataclass
 import hashlib
 import logging
 from pathlib import Path
+import re
 from threading import Event
-from time import sleep
+from time import monotonic
 from typing import Any
 
 from playwright.sync_api import (
@@ -26,6 +27,56 @@ from collectors.network_probe import ProbeWriter, payload_metadata, safe_url
 
 
 logger = logging.getLogger("aie.collectors.native_browser_probe")
+MULTIPLIER_TEXT = re.compile(r"^\\d{1,6}(?:\\.\\d{1,3})?[xX]$")
+
+
+def _normalize_dom_candidates(value: object) -> tuple[dict[str, object], ...]:
+    """Validate multiplier-only DOM observations and discard all other page text."""
+    if not isinstance(value, list):
+        return ()
+    result: list[dict[str, object]] = []
+    seen: set[tuple[object, ...]] = set()
+    for item in value[:100]:
+        if not isinstance(item, dict):
+            continue
+        text = item.get("text")
+        if not isinstance(text, str):
+            continue
+        compact = text.strip().replace(" ", "")
+        if not MULTIPLIER_TEXT.fullmatch(compact):
+            continue
+        number = compact[:-1]
+        try:
+            numeric = float(number)
+        except ValueError:
+            continue
+        if not (1.0 <= numeric <= 1_000_000.0):
+            continue
+
+        coords: list[int] = []
+        valid = True
+        for key in ("x", "y", "w", "h"):
+            raw = item.get(key)
+            if not isinstance(raw, (int, float)):
+                valid = False
+                break
+            coords.append(int(round(float(raw) / 10.0) * 10))
+        if not valid:
+            continue
+
+        candidate = {
+            "multiplier": number,
+            "x_bucket": coords[0],
+            "y_bucket": coords[1],
+            "width_bucket": max(0, coords[2]),
+            "height_bucket": max(0, coords[3]),
+        }
+        identity = tuple(candidate.values())
+        if identity in seen:
+            continue
+        seen.add(identity)
+        result.append(candidate)
+    return tuple(result)
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +84,7 @@ class NativeBrowserProbeConfig:
     target_url: str
     output_path: Path
     cdp_url: str = "http://127.0.0.1:9222"
+    dom_output_path: Path | None = None
 
     def __post_init__(self) -> None:
         if not self.target_url.startswith("https://"):
@@ -41,6 +93,11 @@ class NativeBrowserProbeConfig:
             raise ValueError("cdp_url must be a localhost HTTP endpoint.")
         if not isinstance(self.output_path, Path) or self.output_path.suffix.lower() != ".jsonl":
             raise ValueError("output_path must be a .jsonl Path.")
+        if self.dom_output_path is not None and (
+            not isinstance(self.dom_output_path, Path)
+            or self.dom_output_path.suffix.lower() != ".jsonl"
+        ):
+            raise ValueError("dom_output_path must be a .jsonl Path when supplied.")
 
 
 def _socket_id(request_id: str) -> str:
@@ -68,11 +125,13 @@ class NativeBrowserProbe:
     def __init__(self, config: NativeBrowserProbeConfig) -> None:
         self.config = config
         self.writer = ProbeWriter(config.output_path)
+        self.dom_writer = ProbeWriter(config.dom_output_path) if config.dom_output_path is not None else None
         self.stop_event = Event()
         self._attached_pages: set[int] = set()
         self._cdp_targets: set[int] = set()
         self._cdp_sessions: list[CDPSession] = []
         self._socket_urls: dict[tuple[int, str], str] = {}
+        self._last_dom_snapshot: dict[str, tuple[tuple[object, ...], ...]] = {}
 
     def _record_response(self, response: Response) -> None:
         try:
@@ -261,6 +320,70 @@ class NativeBrowserProbe:
             "target": "frame" if isinstance(target, Frame) else "page",
         })
 
+    def _record_visible_multipliers(self, frame: Frame) -> None:
+        """Persist only visible multiplier-like DOM text plus coarse geometry."""
+        if self.dom_writer is None:
+            return
+        frame_url = safe_url(frame.url) if frame.url else "about:blank"
+        lowered = frame_url.lower()
+        if "aviator" not in lowered and "spribe" not in lowered:
+            return
+        try:
+            raw = frame.evaluate(
+                """() => {
+                    const pattern = /^\\s*\\d{1,6}(?:\\.\\d{1,3})?[xX]\\s*$/;
+                    const result = [];
+                    for (const el of document.querySelectorAll('body *')) {
+                        const text = (el.textContent || '').trim();
+                        if (!pattern.test(text)) continue;
+                        const style = getComputedStyle(el);
+                        if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) continue;
+                        const rect = el.getBoundingClientRect();
+                        if (rect.width <= 0 || rect.height <= 0) continue;
+                        let duplicateParent = false;
+                        for (const child of el.children) {
+                            if ((child.textContent || '').trim() === text) {
+                                duplicateParent = true;
+                                break;
+                            }
+                        }
+                        if (duplicateParent) continue;
+                        result.push({
+                            text,
+                            x: rect.x,
+                            y: rect.y,
+                            w: rect.width,
+                            h: rect.height
+                        });
+                        if (result.length >= 100) break;
+                    }
+                    return result;
+                }"""
+            )
+        except Exception:
+            logger.debug("DOM multiplier observation skipped.", exc_info=False)
+            return
+
+        candidates = _normalize_dom_candidates(raw)
+        snapshot = tuple(
+            (
+                item["multiplier"],
+                item["x_bucket"],
+                item["y_bucket"],
+                item["width_bucket"],
+                item["height_bucket"],
+            )
+            for item in candidates
+        )
+        if self._last_dom_snapshot.get(frame_url) == snapshot:
+            return
+        self._last_dom_snapshot[frame_url] = snapshot
+        self.dom_writer.append({
+            "kind": "dom_multiplier_snapshot",
+            "url": frame_url,
+            "candidates": list(candidates),
+        })
+
     def _attach_page(self, page: Page) -> None:
         identity = id(page)
         if identity in self._attached_pages:
@@ -311,6 +434,13 @@ class NativeBrowserProbe:
                     ]
                     if not open_pages:
                         raise RuntimeError("No open browser pages remain.")
+                    now = monotonic()
+                    last_scan = getattr(self, "_last_dom_scan_at", 0.0)
+                    if now - last_scan >= 0.75:
+                        self._last_dom_scan_at = now
+                        for page in open_pages:
+                            for frame in page.frames:
+                                self._record_visible_multipliers(frame)
                     # A Playwright wait keeps protocol events pumping while remaining read-only.
                     open_pages[0].wait_for_timeout(250)
             finally:
