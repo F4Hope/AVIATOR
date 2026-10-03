@@ -80,19 +80,41 @@ def _append_ledger(path: Path, event: Mapping[str, object]) -> None:
 
 
 def _outstanding_lock(events: list[dict[str, object]]) -> dict[str, object] | None:
-    scored = {
+    closed = {
         event.get("lock_id")
         for event in events
-        if event.get("event") == "prediction_scored" and isinstance(event.get("lock_id"), str)
+        if event.get("event") in {"prediction_scored", "prediction_invalidated"}
+        and isinstance(event.get("lock_id"), str)
     }
     for event in reversed(events):
         if (
             event.get("event") == "prediction_locked"
             and isinstance(event.get("lock_id"), str)
-            and event.get("lock_id") not in scored
+            and event.get("lock_id") not in closed
         ):
             return event
     return None
+
+
+def invalidate_outstanding_lock(
+    ledger_path: Path,
+    reason: str = "collector_liveness_lost",
+) -> dict[str, object] | None:
+    """Close an outstanding prediction lock without scoring it."""
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("invalidation reason must be a nonempty string.")
+    events = _load_ledger(ledger_path)
+    outstanding = _outstanding_lock(events)
+    if outstanding is None:
+        return None
+    event = {
+        "event": "prediction_invalidated",
+        "lock_id": outstanding["lock_id"],
+        "invalidated_at": _utc_now_text(),
+        "reason": reason.strip(),
+    }
+    _append_ledger(ledger_path, event)
+    return event
 
 
 def _lock_id(history_count: int, history_last_round_id: str, locked_at: str) -> str:
