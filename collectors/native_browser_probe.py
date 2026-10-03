@@ -416,10 +416,19 @@ class NativeBrowserProbe:
         if path is None:
             return
         path.parent.mkdir(parents=True, exist_ok=True)
+        network_probe_writable = self.writer.can_append()
+        dom_probe_writable = (
+            self.dom_writer.can_append()
+            if self.dom_writer is not None
+            else True
+        )
         document = {
             "kind": "dom_probe_heartbeat",
             "observed_at": datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z"),
             "collector_session_id": self.collector_session_id,
+            "capture_ready": network_probe_writable and dom_probe_writable,
+            "network_probe_writable": network_probe_writable,
+            "dom_probe_writable": dom_probe_writable,
         }
         temporary = path.with_suffix(path.suffix + ".tmp")
         try:
