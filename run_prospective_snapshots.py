@@ -150,12 +150,13 @@ def _read_new_network_events(path: Path, offset: int) -> tuple[tuple[SystemProbe
         offset = 0
 
     events: list[SystemProbeEvent] = []
-    with path.open("r", encoding="utf-8") as handle:
+    with path.open("rb") as handle:
         handle.seek(offset)
-        for line in handle:
+        for raw_line in handle:
             try:
+                line = raw_line.decode("utf-8")
                 document = json.loads(line)
-            except json.JSONDecodeError:
+            except (UnicodeDecodeError, json.JSONDecodeError):
                 continue
             event = _network_event(document)
             if event is not None:
