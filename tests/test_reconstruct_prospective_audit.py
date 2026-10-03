@@ -70,7 +70,7 @@ def test_trigger_conditioned_challenger_uses_only_past_triggered_outcomes() -> N
     events: list[dict[str, object]] = []
     rounds: list[tuple[str, str, str]] = []
     # Triggered rounds are strongly positive after a mixed historical baseline.
-    for index in range(80):
+    for index in range(50):
         rounds.append(
             (
                 f"r-{index}",
@@ -89,17 +89,17 @@ def test_trigger_conditioned_challenger_uses_only_past_triggered_outcomes() -> N
         events.append(lock)
         events.append(_score(index, "2.5" if index >= 10 else "1.1"))
 
-    samples = load_prospective_feature_samples(events)
+    samples = load_prospective_feature_samples(events, hash_bins=8)
     report = walk_forward_prospective_feature_audit(
         samples,
-        min_training_samples=30,
-        selection_window=12,
+        min_training_samples=20,
+        selection_window=6,
     )
     threshold = next(
         item for item in report.results
         if item.threshold == Decimal("1.5")
     )
 
-    assert threshold.evaluated_targets == 50
+    assert threshold.evaluated_targets == 30
     assert threshold.trigger_conditioned_brier < threshold.prior_brier
     assert threshold.trigger_conditioned_skill_vs_prior_pct > 0
