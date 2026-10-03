@@ -8,6 +8,7 @@ from pathlib import Path
 from config.settings import Settings
 from models.baseline import BaselineConfig
 from prediction.live import (
+    arm_prediction_session,
     invalidate_if_collector_session_changed,
     invalidate_outstanding_lock,
     process_live_prediction_cycle,
@@ -181,16 +182,28 @@ def test_collector_session_change_invalidates_old_lock(settings: Settings) -> No
 
     base = ("1.10", "1.20", "1.30", "1.40", "1.50", "1.60")
     first = ("2.00",) + base
+    second = ("3.00",) + first
     _append_snapshot(dom, "2026-10-03T00:00:00Z", base)
     _append_snapshot(dom, "2026-10-03T00:00:10Z", first)
 
-    process_live_prediction_cycle(
+    armed = process_live_prediction_cycle(
         settings,
         dom,
         ledger,
         BaselineConfig(thresholds=("2",), min_history=1),
         "collector-session-a",
     )
+    assert armed[0]["event"] == "prediction_armed"
+
+    _append_snapshot(dom, "2026-10-03T00:00:20Z", second)
+    locked = process_live_prediction_cycle(
+        settings,
+        dom,
+        ledger,
+        BaselineConfig(thresholds=("2",), min_history=1),
+        "collector-session-a",
+    )
+    assert locked[0]["event"] == "prediction_locked"
 
     assert invalidate_if_collector_session_changed(
         ledger, "collector-session-a"
@@ -201,3 +214,49 @@ def test_collector_session_change_invalidates_old_lock(settings: Settings) -> No
     assert event is not None
     assert event["event"] == "prediction_invalidated"
     assert event["reason"] == "collector_session_changed"
+
+
+
+def test_rearm_requires_fresh_completion_before_new_lock(settings: Settings) -> None:
+    dom = settings.raw_data_dir / "aviator-dom-multipliers.jsonl"
+    ledger = settings.processed_data_dir / "live-prediction-ledger.jsonl"
+
+    base = ("1.10", "1.20", "1.30", "1.40", "1.50", "1.60")
+    first = ("2.00",) + base
+    second = ("3.00",) + first
+    third = ("4.00",) + second
+    _append_snapshot(dom, "2026-10-03T00:00:00Z", base)
+    _append_snapshot(dom, "2026-10-03T00:00:10Z", first)
+
+    config = BaselineConfig(thresholds=("2",), min_history=1)
+    armed = arm_prediction_session(
+        settings, dom, ledger, "collector-session-a"
+    )
+    assert armed is not None
+    assert armed["event"] == "prediction_armed"
+    assert armed["history_count"] == 1
+
+    # No fresh completion after the continuity boundary: no lock.
+    assert process_live_prediction_cycle(
+        settings, dom, ledger, config, "collector-session-a"
+    ) == ()
+
+    _append_snapshot(dom, "2026-10-03T00:00:20Z", second)
+    emitted = process_live_prediction_cycle(
+        settings, dom, ledger, config, "collector-session-a"
+    )
+    assert [event["event"] for event in emitted] == ["prediction_locked"]
+    assert emitted[0]["history_count"] == 2
+
+    # Simulate capture loss: invalidate, then synchronize a result that was already
+    # visible before re-arming. That result cannot authorize a new lock.
+    assert invalidate_outstanding_lock(ledger) is not None
+    _append_snapshot(dom, "2026-10-03T00:00:30Z", third)
+    rearmed = arm_prediction_session(
+        settings, dom, ledger, "collector-session-a"
+    )
+    assert rearmed is not None
+    assert rearmed["history_count"] == 3
+    assert process_live_prediction_cycle(
+        settings, dom, ledger, config, "collector-session-a"
+    ) == ()
