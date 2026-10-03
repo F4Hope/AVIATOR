@@ -3,7 +3,7 @@
 from pathlib import Path
 import pytest
 
-from collectors.native_browser_probe import NativeBrowserProbeConfig, _cdp_frame_payload, _normalize_dom_candidates, _socket_id
+from collectors.native_browser_probe import NativeBrowserProbe, NativeBrowserProbeConfig, _cdp_frame_payload, _normalize_dom_candidates, _socket_id
 
 
 def test_native_probe_config_accepts_local_cdp(tmp_path: Path) -> None:
@@ -85,3 +85,31 @@ def test_native_probe_config_accepts_dom_jsonl_output(tmp_path: Path) -> None:
         dom_output_path=tmp_path / "dom.jsonl",
     )
     assert config.dom_output_path == tmp_path / "dom.jsonl"
+
+
+
+def test_native_probe_config_accepts_heartbeat_json(tmp_path: Path) -> None:
+    config = NativeBrowserProbeConfig(
+        target_url="https://example.test/aviator",
+        output_path=tmp_path / "probe.jsonl",
+        heartbeat_path=tmp_path / "heartbeat.json",
+    )
+    assert config.heartbeat_path == tmp_path / "heartbeat.json"
+
+
+def test_native_probe_writes_session_heartbeat(tmp_path: Path) -> None:
+    import json
+
+    heartbeat = tmp_path / "heartbeat.json"
+    probe = NativeBrowserProbe(
+        NativeBrowserProbeConfig(
+            target_url="https://example.test/aviator",
+            output_path=tmp_path / "probe.jsonl",
+            heartbeat_path=heartbeat,
+        )
+    )
+    probe._write_heartbeat()
+    value = json.loads(heartbeat.read_text(encoding="utf-8"))
+    assert value["kind"] == "dom_probe_heartbeat"
+    assert value["collector_session_id"] == probe.collector_session_id
+    assert value["observed_at"].endswith("Z")
