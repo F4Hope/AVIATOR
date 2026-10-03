@@ -53,6 +53,7 @@ def _heartbeat_session(path: Path, max_age_seconds: float) -> str | None:
             or not isinstance(observed_at, str)
             or not isinstance(session_id, str)
             or not session_id
+            or value.get("capture_ready") is False
         ):
             return None
         heartbeat_at = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
