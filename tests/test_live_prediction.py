@@ -7,7 +7,11 @@ from pathlib import Path
 
 from config.settings import Settings
 from models.baseline import BaselineConfig
-from prediction.live import invalidate_outstanding_lock, process_live_prediction_cycle
+from prediction.live import (
+    invalidate_if_collector_session_changed,
+    invalidate_outstanding_lock,
+    process_live_prediction_cycle,
+)
 
 
 def _candidate(value: str, x: int) -> dict[str, object]:
@@ -168,3 +172,32 @@ def test_repeated_invalidation_is_idempotent(settings: Settings) -> None:
 
     assert invalidate_outstanding_lock(ledger) is not None
     assert invalidate_outstanding_lock(ledger) is None
+
+
+
+def test_collector_session_change_invalidates_old_lock(settings: Settings) -> None:
+    dom = settings.raw_data_dir / "aviator-dom-multipliers.jsonl"
+    ledger = settings.processed_data_dir / "live-prediction-ledger.jsonl"
+
+    base = ("1.10", "1.20", "1.30", "1.40", "1.50", "1.60")
+    first = ("2.00",) + base
+    _append_snapshot(dom, "2026-10-03T00:00:00Z", base)
+    _append_snapshot(dom, "2026-10-03T00:00:10Z", first)
+
+    process_live_prediction_cycle(
+        settings,
+        dom,
+        ledger,
+        BaselineConfig(thresholds=("2",), min_history=1),
+        "collector-session-a",
+    )
+
+    assert invalidate_if_collector_session_changed(
+        ledger, "collector-session-a"
+    ) is None
+    event = invalidate_if_collector_session_changed(
+        ledger, "collector-session-b"
+    )
+    assert event is not None
+    assert event["event"] == "prediction_invalidated"
+    assert event["reason"] == "collector_session_changed"
