@@ -46,7 +46,26 @@ GAME_IDENTIFIER_KEYS = frozenset(
         "clientseedhash",
     }
 )
+CONTROL_STRING_KEYS = frozenset(
+    {
+        "event",
+        "eventtype",
+        "type",
+        "state",
+        "status",
+        "phase",
+        "action",
+        "method",
+        "command",
+        "cmd",
+        "topic",
+        "messageType".lower(),
+        "gamestate",
+        "roundstate",
+    }
+)
 MAX_GAME_FIELDS = 64
+MAX_CONTROL_FIELDS = 64
 
 
 def safe_url(value: str) -> str:
@@ -157,6 +176,65 @@ def game_field_metadata(value: Any) -> tuple[dict[str, object], ...]:
     return tuple(fields)
 
 
+
+def categorical_field_metadata(value: Any) -> tuple[dict[str, object], ...]:
+    """Extract a small allowlist of non-sensitive protocol-state strings.
+
+    Values are retained only for short, low-complexity categorical strings under
+    explicitly allowlisted keys such as event/state/phase/status. Long values,
+    URLs, whitespace-rich text, and token-like strings are excluded.
+    """
+    fields: list[dict[str, object]] = []
+
+    def safe_category(raw: object) -> str | None:
+        if not isinstance(raw, str):
+            return None
+        text = raw.strip()
+        if not 1 <= len(text) <= 48:
+            return None
+        if any(character.isspace() for character in text):
+            return None
+        allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.:-/")
+        if any(character not in allowed for character in text):
+            return None
+        if "://" in text or "/" in text:
+            return None
+        compact = "".join(character.lower() for character in text if character.isalnum())
+        if len(compact) >= 20 and all(character in "0123456789abcdef" for character in compact):
+            return None
+        return text.lower()
+
+    def visit(item: Any, path: tuple[str, ...], depth: int) -> None:
+        if len(fields) >= MAX_CONTROL_FIELDS or depth > MAX_DEPTH:
+            return
+        if isinstance(item, dict):
+            for key, child in item.items():
+                if (
+                    len(fields) >= MAX_CONTROL_FIELDS
+                    or not isinstance(key, str)
+                    or _sensitive_key(key)
+                ):
+                    continue
+                normalized = _normalized_key(key)
+                child_path = (*path, normalized or "field")
+                if normalized in CONTROL_STRING_KEYS:
+                    category = safe_category(child)
+                    if category is not None:
+                        fields.append(
+                            {
+                                "path": ".".join(child_path),
+                                "value": category,
+                            }
+                        )
+                visit(child, child_path, depth + 1)
+        elif isinstance(item, list):
+            for child in item[:20]:
+                visit(child, (*path, "[]"), depth + 1)
+
+    visit(value, (), 0)
+    return tuple(fields)
+
+
 def type_name(value: Any) -> str:
     if value is None:
         return "null"
@@ -234,6 +312,9 @@ def payload_metadata(payload: str | bytes) -> dict[str, object]:
     game_fields = game_field_metadata(parsed)
     if game_fields:
         result["game_fields"] = list(game_fields)
+    categorical_fields = categorical_field_metadata(parsed)
+    if categorical_fields:
+        result["categorical_fields"] = list(categorical_fields)
     return result
 
 
