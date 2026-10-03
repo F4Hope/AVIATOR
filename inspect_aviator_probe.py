@@ -52,6 +52,18 @@ def main(argv: list[str] | None = None) -> int:
                 print("opcodes:")
                 for opcode, count in candidate.opcode_counts:
                     print(f"  {opcode}: {count}")
+            if candidate.entropy_buckets:
+                print("binary_fingerprint:")
+                entropy = ", ".join(f"{value}:{count}" for value, count in candidate.entropy_buckets[:10])
+                printable = ", ".join(f"{value}:{count}" for value, count in candidate.printable_ratio_buckets[:10])
+                zero = ", ".join(f"{value}:{count}" for value, count in candidate.zero_ratio_buckets[:10])
+                high_bit = ", ".join(f"{value}:{count}" for value, count in candidate.high_bit_ratio_buckets[:10])
+                unique = ", ".join(f"{value}:{count}" for value, count in candidate.unique_byte_buckets[:10])
+                print(f"  entropy={entropy}")
+                print(f"  printable_ratio={printable}")
+                print(f"  zero_ratio={zero}")
+                print(f"  high_bit_ratio={high_bit}")
+                print(f"  unique_byte_bucket={unique}")
             if candidate.candidate_paths:
                 print("candidate_paths:")
                 for path, count in candidate.candidate_paths[:20]:

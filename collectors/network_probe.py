@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 import hashlib
 import json
+import math
+from collections import Counter
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -70,6 +72,45 @@ def type_name(value: Any) -> str:
     return "unknown"
 
 
+
+
+def _bucket_ratio(value: float) -> float:
+    """Bucket a ratio to 5% increments to avoid preserving exact byte distributions."""
+    return round(round(max(0.0, min(1.0, value)) / 0.05) * 0.05, 2)
+
+
+def binary_fingerprint(raw: bytes) -> dict[str, object]:
+    """Return coarse, non-reversible structural metadata for a binary frame."""
+    if not raw:
+        return {
+            "entropy_bucket": 0.0,
+            "printable_ratio_bucket": 0.0,
+            "zero_ratio_bucket": 0.0,
+            "high_bit_ratio_bucket": 0.0,
+            "unique_byte_bucket": 0,
+        }
+
+    counts = Counter(raw)
+    length = len(raw)
+    entropy = -sum(
+        (count / length) * math.log2(count / length)
+        for count in counts.values()
+    )
+    printable = sum(1 for value in raw if 32 <= value <= 126)
+    zeroes = counts.get(0, 0)
+    high_bit = sum(count for value, count in counts.items() if value >= 128)
+
+    # Entropy is rounded to quarter-bit increments; unique-byte cardinality is
+    # rounded up to an 8-value bucket. Neither exposes byte values or prefixes.
+    return {
+        "entropy_bucket": round(round(entropy / 0.25) * 0.25, 2),
+        "printable_ratio_bucket": _bucket_ratio(printable / length),
+        "zero_ratio_bucket": _bucket_ratio(zeroes / length),
+        "high_bit_ratio_bucket": _bucket_ratio(high_bit / length),
+        "unique_byte_bucket": min(256, ((len(counts) + 7) // 8) * 8),
+    }
+
+
 def payload_metadata(payload: str | bytes) -> dict[str, object]:
     """Fingerprint a frame and expose JSON structure only; never raw values."""
     raw = payload.encode("utf-8", errors="replace") if isinstance(payload, str) else bytes(payload)
@@ -78,14 +119,17 @@ def payload_metadata(payload: str | bytes) -> dict[str, object]:
         "sha256": hashlib.sha256(raw).hexdigest(),
         "format": "binary" if isinstance(payload, bytes) else "text",
     }
-    if isinstance(payload, str):
-        try:
-            parsed = json.loads(payload)
-        except (json.JSONDecodeError, ValueError):
-            return result
-        result["format"] = "json"
-        result["root_type"] = type_name(parsed)
-        result["shape"] = list(json_shape(parsed))
+    if isinstance(payload, bytes):
+        result["binary_fingerprint"] = binary_fingerprint(raw)
+        return result
+
+    try:
+        parsed = json.loads(payload)
+    except (json.JSONDecodeError, ValueError):
+        return result
+    result["format"] = "json"
+    result["root_type"] = type_name(parsed)
+    result["shape"] = list(json_shape(parsed))
     return result
 
 
