@@ -22,13 +22,22 @@ try {
     $rawDir = Join-Path $repoRoot "data\raw"
     New-Item -ItemType Directory -Path $rawDir -Force | Out-Null
     $probePath = Join-Path $rawDir "aviator-network-probe.jsonl"
-    if (Test-Path $probePath) {
-        $archiveDir = Join-Path $rawDir "archive"
+    $markerPath = Join-Path $rawDir "aviator-round-markers.jsonl"
+    $archiveDir = Join-Path $rawDir "archive"
+    $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+
+    if ((Test-Path $probePath) -or (Test-Path $markerPath)) {
         New-Item -ItemType Directory -Path $archiveDir -Force | Out-Null
-        $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    }
+    if (Test-Path $probePath) {
         $archivePath = Join-Path $archiveDir "aviator-network-probe-$stamp.jsonl"
         Move-Item -Path $probePath -Destination $archivePath
         Write-Host "Archived previous probe: $archivePath" -ForegroundColor DarkGray
+    }
+    if (Test-Path $markerPath) {
+        $markerArchivePath = Join-Path $archiveDir "aviator-round-markers-$stamp.jsonl"
+        Move-Item -Path $markerPath -Destination $markerArchivePath
+        Write-Host "Archived previous markers: $markerArchivePath" -ForegroundColor DarkGray
     }
 
     Write-Host "Attaching AIE to the already-running Edge session..." -ForegroundColor Cyan

@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 import sys
 
-from collectors.probe_analysis import summarize_binary_frame_classes, summarize_live_transports, summarize_probe
+from collectors.probe_analysis import summarize_binary_frame_classes, summarize_live_transports, summarize_marker_correlations, summarize_probe
 from config.settings import DEVELOPMENT_PHASE, load_settings
 
 
@@ -24,6 +24,8 @@ def main(argv: list[str] | None = None) -> int:
         probe_path = settings.raw_data_dir / args.input
         live_candidates = summarize_live_transports(probe_path)
         frame_classes = summarize_binary_frame_classes(probe_path)
+        marker_path = settings.raw_data_dir / "aviator-round-markers.jsonl"
+        correlations = summarize_marker_correlations(probe_path, marker_path)
         candidates = summarize_probe(probe_path)
     except (OSError, ValueError):
         print("Probe inspection failed. Check the probe filename and configuration.", file=sys.stderr)
@@ -35,7 +37,8 @@ def main(argv: list[str] | None = None) -> int:
         "Probe inspection: COMPLETE\n"
         f"Observed groups: {len(candidates)}\n"
         f"Live transport candidates: {len(live_candidates)}\n"
-        f"Binary frame classes: {len(frame_classes)}"
+        f"Binary frame classes: {len(frame_classes)}\n"
+        f"Marker correlations: {len(correlations)}"
     )
 
     if live_candidates:
@@ -85,6 +88,19 @@ def main(argv: list[str] | None = None) -> int:
                 f"high_bit={frame_class.high_bit_ratio_mode} "
                 f"unique={frame_class.unique_byte_mode}"
             )
+
+    if correlations:
+        print("\nROUND MARKER CORRELATION")
+        for correlation in correlations:
+            print(
+                f"\n[{correlation.event}] markers={correlation.markers} "
+                f"window=±{correlation.window_seconds}s"
+            )
+            if correlation.nearby_classes:
+                for url, label, count in correlation.nearby_classes[:10]:
+                    print(f"  {label} count={count} url={url}")
+            else:
+                print("  no nearby binary frames")
 
     for index, candidate in enumerate(candidates[: args.limit], start=1):
         print(

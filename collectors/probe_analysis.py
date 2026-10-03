@@ -444,3 +444,88 @@ def summarize_binary_frame_classes(path: Path) -> tuple[BinaryFrameClass, ...]:
             reverse=True,
         )
     )
+
+
+@dataclass(frozen=True, slots=True)
+class MarkerCorrelation:
+    event: str
+    markers: int
+    window_seconds: float
+    nearby_classes: tuple[tuple[str, str, int], ...]
+
+
+def summarize_marker_correlations(
+    probe_path: Path,
+    marker_path: Path,
+    window_seconds: float = 1.5,
+) -> tuple[MarkerCorrelation, ...]:
+    """Count binary frame classes occurring near user-marked visible round events."""
+    if not probe_path.is_file():
+        raise FileNotFoundError("Probe file does not exist.")
+    if not marker_path.is_file():
+        return ()
+    if window_seconds <= 0:
+        raise ValueError("window_seconds must be positive.")
+
+    frames: list[tuple[float, str, str]] = []
+    with probe_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            kind = event.get("kind")
+            url = event.get("url")
+            payload = event.get("payload")
+            ts = _parse_observed_at(event.get("observed_at"))
+            if (
+                kind not in {"cdp_websocket_received", "cdp_websocket_sent"}
+                or not isinstance(url, str)
+                or not isinstance(payload, dict)
+                or payload.get("format") != "binary"
+                or ts is None
+            ):
+                continue
+            size = payload.get("bytes")
+            if not isinstance(size, int):
+                continue
+            direction = "received" if kind.endswith("received") else "sent"
+            label = f"{direction}:{_size_bucket(size)}"
+            frames.append((ts, url, label))
+
+    markers: dict[str, list[float]] = defaultdict(list)
+    with marker_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            try:
+                marker = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(marker, dict) or marker.get("kind") != "visual_marker":
+                continue
+            event_name = marker.get("event")
+            ts = _parse_observed_at(marker.get("observed_at"))
+            if isinstance(event_name, str) and ts is not None:
+                markers[event_name].append(ts)
+
+    result: list[MarkerCorrelation] = []
+    for event_name, marker_times in sorted(markers.items()):
+        counts: Counter[tuple[str, str]] = Counter()
+        for marker_ts in marker_times:
+            for frame_ts, url, label in frames:
+                if abs(frame_ts - marker_ts) <= window_seconds:
+                    counts[(url, label)] += 1
+        nearby = tuple(
+            (url, label, count)
+            for (url, label), count in counts.most_common(20)
+        )
+        result.append(
+            MarkerCorrelation(
+                event=event_name,
+                markers=len(marker_times),
+                window_seconds=window_seconds,
+                nearby_classes=nearby,
+            )
+        )
+    return tuple(result)
