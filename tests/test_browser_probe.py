@@ -7,7 +7,7 @@ import pytest
 
 from collectors.browser_probe import BrowserProbeConfig
 from collectors.network_probe import ProbeWriter, binary_fingerprint, json_shape, payload_metadata, safe_url
-from collectors.probe_analysis import summarize_binary_frame_classes, summarize_live_transports, summarize_marker_correlations, summarize_probe
+from collectors.probe_analysis import summarize_binary_frame_classes, summarize_live_transports, summarize_marker_class_stats, summarize_marker_correlations, summarize_probe
 
 
 def test_safe_url_removes_query_and_fragment() -> None:
@@ -315,3 +315,55 @@ def test_marker_correlation_returns_empty_without_marker_file(tmp_path: Path) ->
     probe = tmp_path / "probe.jsonl"
     probe.write_text("", encoding="utf-8")
     assert summarize_marker_correlations(probe, tmp_path / "missing.jsonl") == ()
+
+
+
+def test_marker_class_stats_normalize_background_rate(tmp_path: Path) -> None:
+    probe = tmp_path / "probe.jsonl"
+    markers = tmp_path / "markers.jsonl"
+
+    rows = []
+    # High-rate background class across ten seconds.
+    for index in range(100):
+        rows.append({
+            "observed_at": f"2026-10-03T00:00:{index / 10:04.1f}Z",
+            "kind": "cdp_websocket_received",
+            "url": "cdp://websocket/test",
+            "opcode": 2,
+            "payload": payload_metadata(b"x" * 40),
+        })
+    # Sparse class appears right after both marked starts.
+    for stamp in ("2026-10-03T00:00:02.100000Z", "2026-10-03T00:00:07.100000Z"):
+        rows.append({
+            "observed_at": stamp,
+            "kind": "cdp_websocket_received",
+            "url": "cdp://websocket/test",
+            "opcode": 2,
+            "payload": payload_metadata(b"x" * 80),
+        })
+
+    def sort_key(row: dict[str, object]) -> str:
+        return str(row["observed_at"])
+
+    probe.write_text(
+        "\n".join(json.dumps(row) for row in sorted(rows, key=sort_key)) + "\n",
+        encoding="utf-8",
+    )
+    marker_rows = [
+        {"observed_at": "2026-10-03T00:00:02.000000Z", "kind": "visual_marker", "event": "round_start"},
+        {"observed_at": "2026-10-03T00:00:07.000000Z", "kind": "visual_marker", "event": "round_start"},
+    ]
+    markers.write_text("\n".join(json.dumps(row) for row in marker_rows) + "\n", encoding="utf-8")
+
+    stats = summarize_marker_class_stats(probe, markers, window_seconds=0.25)
+    sparse = next(item for item in stats if item.frame_class == "received:64-127")
+    assert sparse.hits == 2
+    assert sparse.hit_rate == 1.0
+    assert sparse.enrichment > 5.0
+    assert sparse.median_nearest_offset_ms == pytest.approx(100.0, abs=1.0)
+
+
+def test_marker_class_stats_returns_empty_without_markers(tmp_path: Path) -> None:
+    probe = tmp_path / "probe.jsonl"
+    probe.write_text("", encoding="utf-8")
+    assert summarize_marker_class_stats(probe, tmp_path / "missing.jsonl") == ()

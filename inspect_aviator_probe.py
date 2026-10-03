@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 import sys
 
-from collectors.probe_analysis import summarize_binary_frame_classes, summarize_live_transports, summarize_marker_correlations, summarize_probe
+from collectors.probe_analysis import summarize_binary_frame_classes, summarize_live_transports, summarize_marker_class_stats, summarize_marker_correlations, summarize_probe
 from config.settings import DEVELOPMENT_PHASE, load_settings
 
 
@@ -26,6 +26,7 @@ def main(argv: list[str] | None = None) -> int:
         frame_classes = summarize_binary_frame_classes(probe_path)
         marker_path = settings.raw_data_dir / "aviator-round-markers.jsonl"
         correlations = summarize_marker_correlations(probe_path, marker_path)
+        marker_stats = summarize_marker_class_stats(probe_path, marker_path)
         candidates = summarize_probe(probe_path)
     except (OSError, ValueError):
         print("Probe inspection failed. Check the probe filename and configuration.", file=sys.stderr)
@@ -38,7 +39,8 @@ def main(argv: list[str] | None = None) -> int:
         f"Observed groups: {len(candidates)}\n"
         f"Live transport candidates: {len(live_candidates)}\n"
         f"Binary frame classes: {len(frame_classes)}\n"
-        f"Marker correlations: {len(correlations)}"
+        f"Marker correlations: {len(correlations)}\n"
+        f"Marker class stats: {len(marker_stats)}"
     )
 
     if live_candidates:
@@ -101,6 +103,25 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"  {label} count={count} url={url}")
             else:
                 print("  no nearby binary frames")
+
+    if marker_stats:
+        print("\nMARKER CLASS ENRICHMENT")
+        current_event = None
+        shown = 0
+        for stat in marker_stats:
+            if stat.event != current_event:
+                current_event = stat.event
+                shown = 0
+                print(f"\n[{current_event}]")
+            if shown >= 10:
+                continue
+            print(
+                f"  {stat.frame_class} hits={stat.hits}/{stat.markers} "
+                f"hit_rate={stat.hit_rate:.3f} nearby={stat.nearby_frames} "
+                f"expected={stat.expected_frames:.2f} enrichment={stat.enrichment:.2f} "
+                f"median_offset_ms={stat.median_nearest_offset_ms} url={stat.url}"
+            )
+            shown += 1
 
     for index, candidate in enumerate(candidates[: args.limit], start=1):
         print(
