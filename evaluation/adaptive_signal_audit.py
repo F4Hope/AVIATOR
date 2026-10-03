@@ -8,7 +8,7 @@ switches are leakage-safe and can react to regime changes.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Sequence
 
@@ -53,6 +53,8 @@ class _RLSProbability:
     dimension: int
     forgetting_factor: float
     regularization: float = 10.0
+    weights: list[float] = field(init=False, repr=False)
+    covariance: list[list[float]] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.dimension < 1:
@@ -63,6 +65,7 @@ class _RLSProbability:
             raise ValueError("regularization must be positive.")
         size = self.dimension + 1
         self.weights = [0.0] * size
+        self.weights[0] = 0.5
         initial = 1.0 / self.regularization
         self.covariance = [
             [initial if row == column else 0.0 for column in range(size)]
