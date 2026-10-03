@@ -13,6 +13,7 @@ import time
 
 from config.settings import DEVELOPMENT_PHASE, load_settings
 from models.baseline import BaselineConfig
+from prediction.adaptive import AdaptiveConfig
 from prediction.live import (
     DEFAULT_LEDGER_FILENAME,
     arm_prediction_session,
@@ -78,7 +79,12 @@ def _print_event(event: dict[str, object]) -> None:
             f"History count: {event['history_count']}\n"
             f"History through: {event['history_last_timestamp']}\n"
             f"Status: {event['status']}\n"
-            f"Probabilities: {event['threshold_probabilities']}\n"
+            f"NEXT MULTIPLIER ESTIMATE: {event['predicted_multiplier']}x\n"
+            f"Prediction interval: {event['prediction_interval']}\n"
+            f"Point confidence: {event['point_confidence']}\n"
+            f"Detected regime: {event['regime']}\n"
+            f"Model blend: {event['point_components']}\n"
+            f"Threshold probabilities: {event['threshold_probabilities']}\n"
             "Timing: locked before next completed result"
         )
     elif kind == "prediction_scored":
@@ -86,8 +92,9 @@ def _print_event(event: dict[str, object]) -> None:
             "\nPREDICTION SCORED\n"
             f"Lock ID: {event['lock_id']}\n"
             f"Actual: {event['actual_multiplier']}x\n"
+            f"Point score: {event['point_score']}\n"
             f"Completed at: {event['actual_timestamp']}\n"
-            f"Scores: {event['threshold_scores']}"
+            f"Threshold scores: {event['threshold_scores']}"
         )
     elif kind == "prediction_gap":
         print(
@@ -115,6 +122,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ledger", default=DEFAULT_LEDGER_FILENAME)
     parser.add_argument("--threshold", action="append", type=_threshold, dest="thresholds")
     parser.add_argument("--min-history", type=int, default=50)
+    parser.add_argument("--point-min-history", type=int, default=20)
     parser.add_argument("--poll-seconds", type=float, default=0.5)
     parser.add_argument("--heartbeat", default="aviator-dom-heartbeat.json")
     parser.add_argument("--max-heartbeat-age", type=float, default=5.0)
@@ -132,6 +140,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--heartbeat must be a plain .json filename.")
     if args.min_history < 1:
         parser.error("--min-history must be positive.")
+    if args.point_min_history < 20:
+        parser.error("--point-min-history must be at least 20.")
     if not 0.1 <= args.poll_seconds <= 60:
         parser.error("--poll-seconds must be between 0.1 and 60.")
     if not 2.0 <= args.max_heartbeat_age <= 60:
@@ -143,6 +153,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         config = BaselineConfig(thresholds=thresholds, min_history=args.min_history)
+        adaptive_config = AdaptiveConfig(min_history=args.point_min_history)
         settings = load_settings()
         dom_path = settings.raw_data_dir / args.input
         ledger_path = settings.processed_data_dir / args.ledger
@@ -152,7 +163,8 @@ def main(argv: list[str] | None = None) -> int:
             "Aviator Intelligence Engine\n"
             f"Phase: {DEVELOPMENT_PHASE}\n"
             "Live prediction: RUNNING\n"
-            f"Minimum history: {config.min_history}\n"
+            f"Threshold minimum history: {config.min_history}\n"
+            f"Point-model minimum history: {adaptive_config.min_history}\n"
             f"Thresholds: {[str(value) for value in config.thresholds]}\n"
             f"Ledger: {ledger_path}\n"
             "Prediction semantics: next completed result; no provider round ID assumed."
@@ -172,7 +184,12 @@ def main(argv: list[str] | None = None) -> int:
             if armed is not None:
                 _print_event(armed)
             for event in process_live_prediction_cycle(
-                settings, dom_path, ledger_path, config, collector_session_id
+                settings,
+                dom_path,
+                ledger_path,
+                config,
+                collector_session_id,
+                adaptive_config,
             ):
                 _print_event(event)
         else:
@@ -229,7 +246,12 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             signature = current
             for event in process_live_prediction_cycle(
-                settings, dom_path, ledger_path, config, collector_session_id
+                settings,
+                dom_path,
+                ledger_path,
+                config,
+                collector_session_id,
+                adaptive_config,
             ):
                 _print_event(event)
 
