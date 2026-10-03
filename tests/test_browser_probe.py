@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from collectors.browser_probe import BrowserProbeConfig
-from collectors.network_probe import ProbeWriter, json_shape, payload_metadata, safe_url
+from collectors.network_probe import ProbeWriter, binary_fingerprint, json_shape, payload_metadata, safe_url
 from collectors.probe_analysis import summarize_live_transports, summarize_probe
 
 
@@ -186,3 +186,43 @@ def test_live_transport_summary_ignores_non_live_events(tmp_path: Path) -> None:
         "payload": {"format": "json", "bytes": 20, "shape": []},
     })
     assert summarize_live_transports(path) == ()
+
+
+
+def test_binary_fingerprint_is_coarse_and_value_free() -> None:
+    raw = bytes(range(64))
+    result = binary_fingerprint(raw)
+    assert set(result) == {
+        "entropy_bucket",
+        "printable_ratio_bucket",
+        "zero_ratio_bucket",
+        "high_bit_ratio_bucket",
+        "unique_byte_bucket",
+    }
+    assert result["unique_byte_bucket"] % 8 == 0
+    serialized = json.dumps(result, sort_keys=True)
+    assert raw.hex() not in serialized
+
+
+def test_payload_metadata_adds_binary_fingerprint() -> None:
+    result = payload_metadata(b"\x00\x01\x02\x03" * 8)
+    assert result["format"] == "binary"
+    assert "binary_fingerprint" in result
+
+
+def test_live_transport_summary_aggregates_binary_fingerprints(tmp_path: Path) -> None:
+    path = tmp_path / "probe.jsonl"
+    writer = ProbeWriter(path, max_bytes=10000)
+    for payload in (b"\x00\x01\x02\x03" * 8, b"\x10\x11\x12\x13" * 8):
+        writer.append({
+            "kind": "cdp_websocket_received",
+            "url": "wss://example.test/binary",
+            "opcode": 2,
+            "payload": payload_metadata(payload),
+        })
+    result = summarize_live_transports(path)
+    assert len(result) == 1
+    candidate = result[0]
+    assert candidate.binary_events == 2
+    assert candidate.entropy_buckets
+    assert candidate.unique_byte_buckets
