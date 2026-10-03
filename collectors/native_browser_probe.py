@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
+from datetime import UTC, datetime
 import hashlib
+import json
 import logging
+import os
 from pathlib import Path
 import re
 from threading import Event
@@ -85,6 +88,7 @@ class NativeBrowserProbeConfig:
     output_path: Path
     cdp_url: str = "http://127.0.0.1:9222"
     dom_output_path: Path | None = None
+    heartbeat_path: Path | None = None
 
     def __post_init__(self) -> None:
         if not self.target_url.startswith("https://"):
@@ -98,6 +102,11 @@ class NativeBrowserProbeConfig:
             or self.dom_output_path.suffix.lower() != ".jsonl"
         ):
             raise ValueError("dom_output_path must be a .jsonl Path when supplied.")
+        if self.heartbeat_path is not None and (
+            not isinstance(self.heartbeat_path, Path)
+            or self.heartbeat_path.suffix.lower() != ".json"
+        ):
+            raise ValueError("heartbeat_path must be a .json Path when supplied.")
 
 
 def _socket_id(request_id: str) -> str:
@@ -399,6 +408,30 @@ class NativeBrowserProbe:
             "candidates": list(candidates),
         })
 
+    def _write_heartbeat(self) -> None:
+        """Atomically publish a minimal collector-liveness heartbeat."""
+        path = self.config.heartbeat_path
+        if path is None:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        document = {
+            "kind": "dom_probe_heartbeat",
+            "observed_at": datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z"),
+        }
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        try:
+            temporary.write_text(
+                json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            os.replace(temporary, path)
+        finally:
+            try:
+                if temporary.exists():
+                    temporary.unlink()
+            except OSError:
+                pass
+
     def _attach_page(self, page: Page) -> None:
         identity = id(page)
         if identity in self._attached_pages:
@@ -456,6 +489,10 @@ class NativeBrowserProbe:
                         for page in open_pages:
                             for frame in page.frames:
                                 self._record_visible_multipliers(frame)
+                        last_heartbeat = getattr(self, "_last_heartbeat_at", 0.0)
+                        if now - last_heartbeat >= 2.0:
+                            self._last_heartbeat_at = now
+                            self._write_heartbeat()
                     # A Playwright wait keeps protocol events pumping while remaining read-only.
                     open_pages[0].wait_for_timeout(250)
             finally:
