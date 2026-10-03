@@ -21,6 +21,18 @@ try {
     $profileDir = Join-Path $repoRoot "data\browser-profile"
     New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
 
+    $rawDir = Join-Path $repoRoot "data\raw"
+    New-Item -ItemType Directory -Path $rawDir -Force | Out-Null
+    $probePath = Join-Path $rawDir "aviator-network-probe.jsonl"
+    if (Test-Path $probePath) {
+        $archiveDir = Join-Path $rawDir "archive"
+        New-Item -ItemType Directory -Path $archiveDir -Force | Out-Null
+        $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+        $archivePath = Join-Path $archiveDir "aviator-network-probe-$stamp.jsonl"
+        Move-Item -Path $probePath -Destination $archivePath
+        Write-Host "Archived previous probe: $archivePath" -ForegroundColor DarkGray
+    }
+
     $targetUrl = $null
     if (Test-Path ".env") {
         $line = Get-Content ".env" | Where-Object { $_ -match '^AIE_BETPAWA_AVIATOR_URL=' } | Select-Object -First 1
