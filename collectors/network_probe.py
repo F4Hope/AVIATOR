@@ -13,7 +13,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 
-MAX_PROBE_BYTES = 10 * 1024 * 1024
+MAX_PROBE_BYTES = 256 * 1024 * 1024
 MAX_JSON_PATHS = 200
 MAX_DEPTH = 8
 SENSITIVE_KEY_PARTS = (
@@ -140,11 +140,19 @@ class ProbeWriter:
     path: Path
     max_bytes: int = MAX_PROBE_BYTES
 
+    def can_append(self) -> bool:
+        if type(self.max_bytes) is not int or self.max_bytes < 1:
+            raise ValueError("max_bytes must be a positive integer.")
+        try:
+            return not self.path.exists() or self.path.stat().st_size < self.max_bytes
+        except OSError:
+            return False
+
     def append(self, event: dict[str, object]) -> bool:
         if type(self.max_bytes) is not int or self.max_bytes < 1:
             raise ValueError("max_bytes must be a positive integer.")
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        if self.path.exists() and self.path.stat().st_size >= self.max_bytes:
+        if not self.can_append():
             return False
         document = {
             "observed_at": datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z"),
