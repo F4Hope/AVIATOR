@@ -1,0 +1,233 @@
+"""Live leakage-safe prediction locking and post-round scoring."""
+
+from __future__ import annotations
+
+from contextlib import closing
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from decimal import Decimal, ROUND_HALF_EVEN
+import hashlib
+import json
+from pathlib import Path
+from typing import Mapping
+
+from collectors.dom_round_ingest import DOM_OBSERVATION_SOURCE, ingest_dom_rounds
+from config.settings import Settings
+from database.database import connect_database_readonly
+from database.migrations import verify_schema
+from models.baseline import BaselineConfig, predict_thresholds
+
+
+LEDGER_VERSION = 1
+DEFAULT_LEDGER_FILENAME = "live-prediction-ledger.jsonl"
+SCORE_PLACES = Decimal("0.000001")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceRound:
+    round_id: str
+    timestamp: str
+    multiplier: str
+
+
+def _utc_now_text() -> str:
+    return datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _load_rounds(settings: Settings) -> tuple[SourceRound, ...]:
+    with closing(connect_database_readonly(settings)) as connection:
+        verify_schema(connection)
+        rows = connection.execute(
+            "SELECT round_id, timestamp, multiplier FROM rounds "
+            "WHERE source = ? ORDER BY timestamp ASC, round_id ASC",
+            (DOM_OBSERVATION_SOURCE,),
+        ).fetchall()
+    return tuple(
+        SourceRound(
+            round_id=row["round_id"],
+            timestamp=row["timestamp"],
+            multiplier=row["multiplier"],
+        )
+        for row in rows
+    )
+
+
+def _load_ledger(path: Path) -> list[dict[str, object]]:
+    if not path.exists():
+        return []
+    events: list[dict[str, object]] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            value = json.loads(line)
+            if not isinstance(value, dict):
+                raise ValueError("Live prediction ledger contains a non-object event.")
+            if value.get("ledger_version") != LEDGER_VERSION:
+                raise ValueError("Live prediction ledger version is unsupported.")
+            events.append(value)
+    return events
+
+
+def _append_ledger(path: Path, event: Mapping[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = dict(event)
+    payload["ledger_version"] = LEDGER_VERSION
+    line = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    with path.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(line + "\n")
+        handle.flush()
+
+
+def _outstanding_lock(events: list[dict[str, object]]) -> dict[str, object] | None:
+    scored = {
+        event.get("lock_id")
+        for event in events
+        if event.get("event") == "prediction_scored" and isinstance(event.get("lock_id"), str)
+    }
+    for event in reversed(events):
+        if (
+            event.get("event") == "prediction_locked"
+            and isinstance(event.get("lock_id"), str)
+            and event.get("lock_id") not in scored
+        ):
+            return event
+    return None
+
+
+def _lock_id(history_count: int, history_last_round_id: str, locked_at: str) -> str:
+    material = f"{history_count}|{history_last_round_id}|{locked_at}".encode("utf-8")
+    return "lock-" + hashlib.sha256(material).hexdigest()[:24]
+
+
+def _prediction_lock(
+    rounds: tuple[SourceRound, ...],
+    config: BaselineConfig,
+) -> dict[str, object]:
+    if not rounds:
+        raise ValueError("At least one completed round is required before locking a prediction.")
+
+    prediction = predict_thresholds([round.multiplier for round in rounds], config)
+    locked_at = _utc_now_text()
+    probabilities = {
+        str(item.threshold): (
+            None if item.probability is None else format(item.probability, "f")
+        )
+        for item in prediction.probabilities
+    }
+    last = rounds[-1]
+    return {
+        "event": "prediction_locked",
+        "lock_id": _lock_id(len(rounds), last.round_id, locked_at),
+        "locked_at": locked_at,
+        "source": DOM_OBSERVATION_SOURCE,
+        "model_name": prediction.model_name,
+        "model_version": prediction.model_version,
+        "status": prediction.status,
+        "mode": prediction.mode,
+        "window": prediction.window,
+        "min_history": prediction.min_history,
+        "history_count": len(rounds),
+        "history_last_round_id": last.round_id,
+        "history_last_timestamp": last.timestamp,
+        "timing_guarantee": "locked_before_next_completed_result",
+        "threshold_probabilities": probabilities,
+    }
+
+
+def _score_lock(lock: Mapping[str, object], actual: SourceRound) -> dict[str, object]:
+    probabilities = lock.get("threshold_probabilities")
+    if not isinstance(probabilities, dict):
+        raise ValueError("Prediction lock is missing threshold probabilities.")
+
+    actual_multiplier = Decimal(actual.multiplier)
+    scores: dict[str, object] = {}
+    for threshold_text, probability_text in probabilities.items():
+        if not isinstance(threshold_text, str):
+            raise ValueError("Prediction threshold must be text.")
+        threshold = Decimal(threshold_text)
+        outcome = int(actual_multiplier >= threshold)
+        if probability_text is None:
+            scores[threshold_text] = {"actual": outcome, "brier": None}
+            continue
+        if not isinstance(probability_text, str):
+            raise ValueError("Prediction probability must be decimal text or null.")
+        probability = Decimal(probability_text)
+        brier = ((probability - Decimal(outcome)) ** 2).quantize(
+            SCORE_PLACES, rounding=ROUND_HALF_EVEN
+        )
+        scores[threshold_text] = {
+            "actual": outcome,
+            "brier": format(brier, "f"),
+        }
+
+    return {
+        "event": "prediction_scored",
+        "lock_id": lock["lock_id"],
+        "scored_at": _utc_now_text(),
+        "actual_round_id": actual.round_id,
+        "actual_timestamp": actual.timestamp,
+        "actual_multiplier": actual.multiplier,
+        "threshold_scores": scores,
+    }
+
+
+def process_live_prediction_cycle(
+    settings: Settings,
+    dom_path: Path,
+    ledger_path: Path,
+    config: BaselineConfig,
+) -> tuple[dict[str, object], ...]:
+    """Synchronize DOM results, score an existing lock, then lock the next result.
+
+    A lock is never created retroactively. If more than one completed result arrived
+    after an outstanding lock, only the first scores that lock; additional results
+    are explicitly recorded as an unpredicted gap before a new lock is created.
+    """
+    ingest_dom_rounds(dom_path, settings)
+    rounds = _load_rounds(settings)
+    events = _load_ledger(ledger_path)
+    emitted: list[dict[str, object]] = []
+    outstanding = _outstanding_lock(events)
+
+    if outstanding is None:
+        if rounds:
+            lock = _prediction_lock(rounds, config)
+            _append_ledger(ledger_path, lock)
+            emitted.append(lock)
+        return tuple(emitted)
+
+    history_count = outstanding.get("history_count")
+    last_round_id = outstanding.get("history_last_round_id")
+    if not isinstance(history_count, int) or history_count < 1 or not isinstance(last_round_id, str):
+        raise ValueError("Prediction lock history metadata is invalid.")
+    if history_count > len(rounds):
+        raise ValueError("Prediction ledger history exceeds the current stored source history.")
+    if rounds[history_count - 1].round_id != last_round_id:
+        raise ValueError("Stored round history no longer matches the prediction lock.")
+
+    new_rounds = rounds[history_count:]
+    if not new_rounds:
+        return ()
+
+    score = _score_lock(outstanding, new_rounds[0])
+    _append_ledger(ledger_path, score)
+    emitted.append(score)
+
+    if len(new_rounds) > 1:
+        gap = {
+            "event": "prediction_gap",
+            "observed_at": _utc_now_text(),
+            "after_lock_id": outstanding["lock_id"],
+            "unpredicted_rounds": len(new_rounds) - 1,
+            "first_unpredicted_round_id": new_rounds[1].round_id,
+            "last_unpredicted_round_id": new_rounds[-1].round_id,
+            "reason": "multiple_completed_results_arrived_before_next_lock",
+        }
+        _append_ledger(ledger_path, gap)
+        emitted.append(gap)
+
+    lock = _prediction_lock(rounds, config)
+    _append_ledger(ledger_path, lock)
+    emitted.append(lock)
+    return tuple(emitted)
