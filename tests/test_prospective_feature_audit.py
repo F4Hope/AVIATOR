@@ -2,6 +2,7 @@
 
 from evaluation.prospective_feature_audit import (
     load_prospective_feature_samples,
+    reconstruct_missing_historical_priors,
     walk_forward_prospective_feature_audit,
 )
 
@@ -85,3 +86,58 @@ def test_walk_forward_feature_model_can_detect_synthetic_signal() -> None:
     assert threshold.evaluated_targets == 70
     assert threshold.feature_brier < threshold.prior_brier
     assert threshold.feature_skill_vs_prior_pct > 0
+
+
+def test_reconstructs_missing_prior_from_only_previous_round_history() -> None:
+    rounds = tuple(
+        (
+            f"r-{index}",
+            f"2026-10-03T00:00:{index:02d}Z",
+            "2.5" if index % 2 == 0 else "1.1",
+        )
+        for index in range(10)
+    )
+    lock = _lock(1, True)
+    lock.pop("forecast")
+    lock["previous_round_id"] = "r-5"
+    events = (lock, _score(1, True))
+
+    rebuilt, count = reconstruct_missing_historical_priors(events, rounds)
+
+    assert count == 1
+    rebuilt_lock = rebuilt[0]
+    forecast = rebuilt_lock["forecast"]
+    assert isinstance(forecast, dict)
+    probabilities = forecast["historical_probabilities"]
+    assert isinstance(probabilities, dict)
+    # History is r-0 through r-5 only: 3 of 6 are >=2x.
+    assert probabilities["2"] == "0.500000"
+    assert forecast["prior_reconstructed_for_audit"] is True
+
+
+def test_trigger_conditioned_challenger_uses_only_prior_trigger_results() -> None:
+    events: list[dict[str, object]] = []
+    # Every triggered sample is positive while the stored historical prior is 0.5.
+    for index in range(100):
+        lock = _lock(index, True)
+        lock["forecast"]["historical_probabilities"] = {
+            "1.5": "0.500000",
+            "2": "0.500000",
+            "5": "0.100000",
+        }
+        events.extend((lock, _score(index, True)))
+
+    samples = load_prospective_feature_samples(events, hash_bins=8)
+    report = walk_forward_prospective_feature_audit(
+        samples,
+        min_training_samples=30,
+        selection_window=12,
+    )
+    threshold = next(
+        result for result in report.results
+        if str(result.threshold) == "2"
+    )
+
+    assert threshold.trigger_conditioned_brier < threshold.prior_brier
+    assert threshold.trigger_conditioned_skill_vs_prior_pct > 0
+    assert threshold.trigger_conditioned_better_blocks >= 3

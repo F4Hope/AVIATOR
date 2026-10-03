@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
+import sqlite3
 import sys
 
+from collectors.dom_round_ingest import DOM_OBSERVATION_SOURCE
 from config.settings import DEVELOPMENT_PHASE, load_settings
+from database.database import connect_database_readonly
+from database.migrations import verify_schema
 from evaluation.prospective_feature_audit import (
     load_prospective_feature_samples,
+    reconstruct_missing_historical_priors,
     walk_forward_prospective_feature_audit,
 )
 from prediction.prospective import (
@@ -40,8 +46,23 @@ def main(argv: list[str] | None = None) -> int:
         settings = load_settings()
         ledger_path = settings.processed_data_dir / args.ledger
         events = load_snapshot_ledger(ledger_path)
-        samples = load_prospective_feature_samples(
+        with closing(connect_database_readonly(settings)) as connection:
+            verify_schema(connection)
+            rows = connection.execute(
+                "SELECT round_id, timestamp, multiplier FROM rounds "
+                "WHERE source = ? ORDER BY timestamp ASC, round_id ASC",
+                (DOM_OBSERVATION_SOURCE,),
+            ).fetchall()
+        rounds = tuple(
+            (row["round_id"], row["timestamp"], row["multiplier"])
+            for row in rows
+        )
+        audit_events, reconstructed_priors = reconstruct_missing_historical_priors(
             events,
+            rounds,
+        )
+        samples = load_prospective_feature_samples(
+            audit_events,
             hash_bins=args.hash_bins,
         )
         report = walk_forward_prospective_feature_audit(
@@ -49,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
             min_training_samples=args.min_training_samples,
             selection_window=args.selection_window,
         )
-    except (OSError, ValueError, RuntimeError) as exc:
+    except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
         print(f"Prospective feature audit failed: {exc}", file=sys.stderr)
         return 1
 
@@ -74,6 +95,7 @@ def main(argv: list[str] | None = None) -> int:
         f"Locked snapshots: {locked}\n"
         f"Scored snapshots: {scored}\n"
         f"Missed snapshots: {missed}\n"
+        f"Reconstructed historical priors: {reconstructed_priors}\n"
         f"Usable feature/outcome pairs: {len(samples)}\n"
         f"Feature dimension: {report.feature_dimension}\n"
         f"Minimum training samples: {report.min_training_samples}\n"
@@ -81,17 +103,34 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     for result in report.results:
-        verdict = (
-            "CANDIDATE_EDGE"
-            if result.feature_skill_vs_prior_pct > 0
-            and result.better_blocks >= 3
-            else "NO_DEMONSTRATED_EDGE"
+        trigger_candidate = (
+            result.trigger_conditioned_skill_vs_prior_pct > 0
+            and result.trigger_conditioned_better_blocks >= 3
         )
+        feature_candidate = (
+            result.feature_skill_vs_prior_pct > 0
+            and result.better_blocks >= 3
+        )
+        if trigger_candidate and feature_candidate:
+            verdict = "TRIGGER_AND_FEATURE_CANDIDATE_EDGE"
+        elif trigger_candidate:
+            verdict = "TRIGGER_CONDITIONED_CANDIDATE_EDGE"
+        elif feature_candidate:
+            verdict = "FEATURE_CANDIDATE_EDGE"
+        else:
+            verdict = "NO_DEMONSTRATED_EDGE"
         print(
             f"\nTHRESHOLD >= {result.threshold}x\n"
             f"Evaluated targets: {result.evaluated_targets}\n"
             f"Positive targets: {result.positives}\n"
-            f"Stored historical-prior Brier: {result.prior_brier}\n"
+            f"Stored/reconstructed historical-prior Brier: "
+            f"{result.prior_brier}\n"
+            f"Trigger-conditioned Brier: "
+            f"{result.trigger_conditioned_brier}\n"
+            f"Trigger-conditioned skill vs prior: "
+            f"{result.trigger_conditioned_skill_vs_prior_pct}%\n"
+            f"Trigger-conditioned better blocks: "
+            f"{result.trigger_conditioned_better_blocks}/{result.blocks}\n"
             f"Prospective feature-model Brier: {result.feature_brier}\n"
             f"Feature skill vs prior: {result.feature_skill_vs_prior_pct}%\n"
             f"Feature model better blocks: "
