@@ -573,6 +573,11 @@ def main(argv: list[str] | None = None) -> int:
                             previous_round,
                             rounds,
                         )
+                        # Establish the new round's byte boundary before any
+                        # potentially expensive regime refresh. Events appended
+                        # during refresh remain readable on the next loop.
+                        interval_events.clear()
+                        network_offset = _eof(network_path)
                         consecutive_trigger_misses += 1
                         if consecutive_trigger_misses >= 8:
                             refreshed, training_starts = (
@@ -601,8 +606,6 @@ def main(argv: list[str] | None = None) -> int:
                                 )
                                 _print_event(refresh_event)
                             consecutive_trigger_misses = 0
-                        interval_events.clear()
-                        network_offset = _eof(network_path)
 
             new_events, network_offset = _read_new_network_events(
                 network_path, network_offset
