@@ -1,0 +1,40 @@
+$ErrorActionPreference = "Stop"
+Set-StrictMode -Version Latest
+
+$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
+Push-Location $repoRoot
+try {
+    $python = Join-Path $repoRoot ".venv\Scripts\python.exe"
+    if (-not (Test-Path $python)) {
+        throw "AIE virtual environment is missing. Run .\deploy\windows\setup-native-aie.ps1 first."
+    }
+
+    try {
+        $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:9222/json/version" -TimeoutSec 3
+        if ($response.StatusCode -ne 200) {
+            throw "unexpected status"
+        }
+    }
+    catch {
+        throw "No AIE Edge debug endpoint is available. Run .\deploy\windows\launch-native-browser.ps1 first."
+    }
+
+    $rawDir = Join-Path $repoRoot "data\raw"
+    New-Item -ItemType Directory -Path $rawDir -Force | Out-Null
+    $probePath = Join-Path $rawDir "aviator-network-probe.jsonl"
+    if (Test-Path $probePath) {
+        $archiveDir = Join-Path $rawDir "archive"
+        New-Item -ItemType Directory -Path $archiveDir -Force | Out-Null
+        $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+        $archivePath = Join-Path $archiveDir "aviator-network-probe-$stamp.jsonl"
+        Move-Item -Path $probePath -Destination $archivePath
+        Write-Host "Archived previous probe: $archivePath" -ForegroundColor DarkGray
+    }
+
+    Write-Host "Attaching AIE to the already-running Edge session..." -ForegroundColor Cyan
+    Write-Host "Watch the Aviator page while this attaches." -ForegroundColor Yellow
+    & $python probe_aviator_native.py --cdp-url http://127.0.0.1:9222
+}
+finally {
+    Pop-Location
+}
