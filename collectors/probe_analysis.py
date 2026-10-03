@@ -529,3 +529,154 @@ def summarize_marker_correlations(
             )
         )
     return tuple(result)
+
+
+@dataclass(frozen=True, slots=True)
+class MarkerClassStat:
+    event: str
+    url: str
+    frame_class: str
+    markers: int
+    hits: int
+    hit_rate: float
+    nearby_frames: int
+    expected_frames: float
+    enrichment: float
+    median_nearest_offset_ms: float | None
+
+
+def _median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2.0
+
+
+def summarize_marker_class_stats(
+    probe_path: Path,
+    marker_path: Path,
+    window_seconds: float = 0.75,
+) -> tuple[MarkerClassStat, ...]:
+    """Measure per-class enrichment and nearest timing around visual round markers.
+
+    The baseline is each class's average rate across the capture. This prevents
+    high-frequency traffic from looking important merely because it appears in
+    every marker window.
+    """
+    if not probe_path.is_file():
+        raise FileNotFoundError("Probe file does not exist.")
+    if not marker_path.is_file():
+        return ()
+    if window_seconds <= 0:
+        raise ValueError("window_seconds must be positive.")
+
+    frames_by_class: dict[tuple[str, str], list[float]] = defaultdict(list)
+    all_frame_times: list[float] = []
+    with probe_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            kind = event.get("kind")
+            url = event.get("url")
+            payload = event.get("payload")
+            ts = _parse_observed_at(event.get("observed_at"))
+            if (
+                kind not in {"cdp_websocket_received", "cdp_websocket_sent"}
+                or not isinstance(url, str)
+                or not isinstance(payload, dict)
+                or payload.get("format") != "binary"
+                or ts is None
+            ):
+                continue
+            size = payload.get("bytes")
+            if not isinstance(size, int):
+                continue
+            direction = "received" if kind.endswith("received") else "sent"
+            label = f"{direction}:{_size_bucket(size)}"
+            frames_by_class[(url, label)].append(ts)
+            all_frame_times.append(ts)
+
+    if len(all_frame_times) < 2:
+        return ()
+    duration = max(all_frame_times) - min(all_frame_times)
+    if duration <= 0:
+        return ()
+
+    markers: dict[str, list[float]] = defaultdict(list)
+    with marker_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            try:
+                marker = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(marker, dict) or marker.get("kind") != "visual_marker":
+                continue
+            event_name = marker.get("event")
+            ts = _parse_observed_at(marker.get("observed_at"))
+            if isinstance(event_name, str) and ts is not None:
+                markers[event_name].append(ts)
+
+    stats: list[MarkerClassStat] = []
+    for event_name, marker_times in sorted(markers.items()):
+        marker_count = len(marker_times)
+        if marker_count == 0:
+            continue
+        for (url, label), frame_times in frames_by_class.items():
+            total_frames = len(frame_times)
+            baseline_rate = total_frames / duration
+            expected = baseline_rate * (2.0 * window_seconds) * marker_count
+            nearby_frames = 0
+            hits = 0
+            nearest_offsets_ms: list[float] = []
+
+            for marker_ts in marker_times:
+                offsets = [
+                    frame_ts - marker_ts
+                    for frame_ts in frame_times
+                    if abs(frame_ts - marker_ts) <= window_seconds
+                ]
+                nearby_frames += len(offsets)
+                if offsets:
+                    hits += 1
+                    nearest = min(offsets, key=abs)
+                    nearest_offsets_ms.append(nearest * 1000.0)
+
+            enrichment = (nearby_frames / expected) if expected > 0 else 0.0
+            stats.append(
+                MarkerClassStat(
+                    event=event_name,
+                    url=url,
+                    frame_class=label,
+                    markers=marker_count,
+                    hits=hits,
+                    hit_rate=round(hits / marker_count, 3),
+                    nearby_frames=nearby_frames,
+                    expected_frames=round(expected, 2),
+                    enrichment=round(enrichment, 2),
+                    median_nearest_offset_ms=(
+                        round(_median(nearest_offsets_ms), 1)
+                        if nearest_offsets_ms
+                        else None
+                    ),
+                )
+            )
+
+    return tuple(
+        sorted(
+            stats,
+            key=lambda item: (
+                item.event,
+                item.hit_rate * item.enrichment,
+                item.hits,
+                item.nearby_frames,
+            ),
+            reverse=True,
+        )
+    )
