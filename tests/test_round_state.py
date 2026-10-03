@@ -105,10 +105,10 @@ def test_prestart_builder_excludes_events_inside_safety_margin(tmp_path: Path) -
 
     rounds = [
         ObservedRound(
-            timestamp=f"2026-10-03T00:00:{index:02d}Z",
+            timestamp=f"2026-10-02T23:59:{second:02d}Z",
             multiplier=Decimal("1.5"),
         )
-        for index in range(1, 20)
+        for second in range(40, 60)
     ]
     rounds.extend(
         [
@@ -122,8 +122,6 @@ def test_prestart_builder_excludes_events_inside_safety_margin(tmp_path: Path) -
             ),
         ]
     )
-    # Keep chronological order while ensuring 20 history rows exist before target.
-    rounds = sorted(rounds, key=lambda item: item.timestamp)
 
     def probe(stamp: float) -> SystemProbeEvent:
         return SystemProbeEvent(
