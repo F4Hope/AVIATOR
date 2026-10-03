@@ -46,6 +46,11 @@ class LiveTransportCandidate:
     max_bytes: int | None
     distinct_sizes: int
     score: int
+    entropy_buckets: tuple[tuple[float, int], ...]
+    printable_ratio_buckets: tuple[tuple[float, int], ...]
+    zero_ratio_buckets: tuple[tuple[float, int], ...]
+    high_bit_ratio_buckets: tuple[tuple[float, int], ...]
+    unique_byte_buckets: tuple[tuple[int, int], ...]
 
 
 def _interesting_paths(paths: Counter[str]) -> tuple[tuple[str, int], ...]:
@@ -135,6 +140,11 @@ def summarize_live_transports(path: Path) -> tuple[LiveTransportCandidate, ...]:
             "paths": Counter(),
             "opcodes": Counter(),
             "sizes": Counter(),
+            "entropy": Counter(),
+            "printable": Counter(),
+            "zero": Counter(),
+            "high_bit": Counter(),
+            "unique_bytes": Counter(),
         }
     )
 
@@ -177,6 +187,29 @@ def summarize_live_transports(path: Path) -> tuple[LiveTransportCandidate, ...]:
                 sizes: Counter[int] = group["sizes"]  # type: ignore[assignment]
                 sizes[payload_bytes] += 1
 
+            fingerprint = payload.get("binary_fingerprint")
+            if isinstance(fingerprint, dict):
+                entropy_value = fingerprint.get("entropy_bucket")
+                printable_value = fingerprint.get("printable_ratio_bucket")
+                zero_value = fingerprint.get("zero_ratio_bucket")
+                high_bit_value = fingerprint.get("high_bit_ratio_bucket")
+                unique_value = fingerprint.get("unique_byte_bucket")
+                if isinstance(entropy_value, (int, float)):
+                    entropy: Counter[float] = group["entropy"]  # type: ignore[assignment]
+                    entropy[float(entropy_value)] += 1
+                if isinstance(printable_value, (int, float)):
+                    printable: Counter[float] = group["printable"]  # type: ignore[assignment]
+                    printable[float(printable_value)] += 1
+                if isinstance(zero_value, (int, float)):
+                    zero: Counter[float] = group["zero"]  # type: ignore[assignment]
+                    zero[float(zero_value)] += 1
+                if isinstance(high_bit_value, (int, float)):
+                    high_bit: Counter[float] = group["high_bit"]  # type: ignore[assignment]
+                    high_bit[float(high_bit_value)] += 1
+                if isinstance(unique_value, int):
+                    unique_bytes: Counter[int] = group["unique_bytes"]  # type: ignore[assignment]
+                    unique_bytes[unique_value] += 1
+
             shape = payload.get("shape")
             if isinstance(shape, list):
                 paths: Counter[str] = group["paths"]  # type: ignore[assignment]
@@ -190,6 +223,11 @@ def summarize_live_transports(path: Path) -> tuple[LiveTransportCandidate, ...]:
         paths: Counter[str] = data["paths"]  # type: ignore[assignment]
         opcodes: Counter[int] = data["opcodes"]  # type: ignore[assignment]
         sizes: Counter[int] = data["sizes"]  # type: ignore[assignment]
+        entropy: Counter[float] = data["entropy"]  # type: ignore[assignment]
+        printable: Counter[float] = data["printable"]  # type: ignore[assignment]
+        zero: Counter[float] = data["zero"]  # type: ignore[assignment]
+        high_bit: Counter[float] = data["high_bit"]  # type: ignore[assignment]
+        unique_bytes: Counter[int] = data["unique_bytes"]  # type: ignore[assignment]
         candidate_paths = _interesting_paths(paths)
         events = int(data["events"])
         received = int(data["received"])
@@ -218,6 +256,11 @@ def summarize_live_transports(path: Path) -> tuple[LiveTransportCandidate, ...]:
                 max_bytes=ordered_sizes[-1] if ordered_sizes else None,
                 distinct_sizes=len(ordered_sizes),
                 score=score,
+                entropy_buckets=tuple(sorted(entropy.items())),
+                printable_ratio_buckets=tuple(sorted(printable.items())),
+                zero_ratio_buckets=tuple(sorted(zero.items())),
+                high_bit_ratio_buckets=tuple(sorted(high_bit.items())),
+                unique_byte_buckets=tuple(sorted(unique_bytes.items())),
             )
         )
 
