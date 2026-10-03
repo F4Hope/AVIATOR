@@ -7,7 +7,7 @@ import pytest
 
 from collectors.browser_probe import BrowserProbeConfig
 from collectors.network_probe import ProbeWriter, json_shape, payload_metadata, safe_url
-from collectors.probe_analysis import summarize_probe
+from collectors.probe_analysis import summarize_live_transports, summarize_probe
 
 
 def test_safe_url_removes_query_and_fragment() -> None:
@@ -132,3 +132,57 @@ def test_probe_summary_includes_http_status_counts(tmp_path: Path) -> None:
     })
     result = summarize_probe(path)
     assert result[0].status_counts == ((200, 1), (403, 1))
+
+
+
+def test_live_transport_ranking_prefers_round_like_inbound_stream(tmp_path: Path) -> None:
+    path = tmp_path / "probe.jsonl"
+    writer = ProbeWriter(path, max_bytes=20000)
+
+    for _ in range(3):
+        writer.append({
+            "kind": "cdp_websocket_received",
+            "url": "wss://example.test/noise",
+            "opcode": 1,
+            "payload": {"format": "text", "bytes": 12},
+        })
+
+    for size in (48, 52, 61, 58, 64):
+        writer.append({
+            "kind": "cdp_websocket_received",
+            "url": "wss://example.test/live",
+            "opcode": 1,
+            "payload": {
+                "format": "json",
+                "bytes": size,
+                "shape": [
+                    {"path": "game.round_id", "type": "string"},
+                    {"path": "game.multiplier", "type": "number"},
+                    {"path": "game.status", "type": "string"},
+                ],
+            },
+        })
+
+    result = summarize_live_transports(path)
+    assert len(result) == 2
+    assert result[0].url == "wss://example.test/live"
+    assert result[0].received_events == 5
+    assert result[0].json_events == 5
+    assert result[0].distinct_sizes == 5
+    assert {path for path, _ in result[0].candidate_paths} == {
+        "game.round_id",
+        "game.multiplier",
+        "game.status",
+    }
+
+
+def test_live_transport_summary_ignores_non_live_events(tmp_path: Path) -> None:
+    path = tmp_path / "probe.jsonl"
+    writer = ProbeWriter(path, max_bytes=4096)
+    writer.append({
+        "kind": "response",
+        "url": "https://example.test/api",
+        "status": 200,
+        "payload": {"format": "json", "bytes": 20, "shape": []},
+    })
+    assert summarize_live_transports(path) == ()
