@@ -7,7 +7,7 @@ import pytest
 
 from collectors.browser_probe import BrowserProbeConfig
 from collectors.network_probe import ProbeWriter, binary_fingerprint, json_shape, payload_metadata, safe_url
-from collectors.probe_analysis import summarize_binary_frame_classes, summarize_live_transports, summarize_marker_class_stats, summarize_marker_correlations, summarize_probe
+from collectors.probe_analysis import summarize_binary_frame_classes, summarize_live_transports, summarize_marker_class_stats, summarize_marker_correlations, summarize_marker_signature_stats, summarize_probe
 
 
 def test_safe_url_removes_query_and_fragment() -> None:
@@ -367,3 +367,55 @@ def test_marker_class_stats_returns_empty_without_markers(tmp_path: Path) -> Non
     probe = tmp_path / "probe.jsonl"
     probe.write_text("", encoding="utf-8")
     assert summarize_marker_class_stats(probe, tmp_path / "missing.jsonl") == ()
+
+
+
+def test_marker_signature_stats_separate_fingerprint_patterns(tmp_path: Path) -> None:
+    probe = tmp_path / "probe.jsonl"
+    markers = tmp_path / "markers.jsonl"
+
+    rows = []
+    # Background signature, frequent and unrelated.
+    for index in range(40):
+        rows.append({
+            "observed_at": f"2026-10-03T00:00:{index / 4:06.3f}Z",
+            "kind": "cdp_websocket_received",
+            "url": "cdp://websocket/test",
+            "opcode": 2,
+            "payload": payload_metadata(b"\x00\x01\x02\x03" * 20),
+        })
+    # Distinct signature appearing near both starts.
+    special = payload_metadata(bytes(range(80)))
+    for stamp in ("2026-10-03T00:00:02.100000Z", "2026-10-03T00:00:07.100000Z"):
+        rows.append({
+            "observed_at": stamp,
+            "kind": "cdp_websocket_received",
+            "url": "cdp://websocket/test",
+            "opcode": 2,
+            "payload": special,
+        })
+
+    probe.write_text(
+        "\n".join(json.dumps(row) for row in sorted(rows, key=lambda r: str(r["observed_at"]))) + "\n",
+        encoding="utf-8",
+    )
+    marker_rows = [
+        {"observed_at": "2026-10-03T00:00:02.000000Z", "kind": "visual_marker", "event": "round_start"},
+        {"observed_at": "2026-10-03T00:00:07.000000Z", "kind": "visual_marker", "event": "round_start"},
+    ]
+    markers.write_text("\n".join(json.dumps(row) for row in marker_rows) + "\n", encoding="utf-8")
+
+    stats = summarize_marker_signature_stats(
+        probe, markers, window_seconds=0.25, min_total_frames=2
+    )
+    assert stats
+    best = next(item for item in stats if item.hits == 2 and item.hit_rate == 1.0)
+    assert "received:64-127" in best.signature
+    assert best.enrichment > 5.0
+    assert best.median_nearest_offset_ms == pytest.approx(100.0, abs=1.0)
+
+
+def test_marker_signature_stats_returns_empty_without_marker_file(tmp_path: Path) -> None:
+    probe = tmp_path / "probe.jsonl"
+    probe.write_text("", encoding="utf-8")
+    assert summarize_marker_signature_stats(probe, tmp_path / "missing.jsonl") == ()
