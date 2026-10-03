@@ -27,7 +27,7 @@ from collectors.network_probe import ProbeWriter, payload_metadata, safe_url
 
 
 logger = logging.getLogger("aie.collectors.native_browser_probe")
-MULTIPLIER_TEXT = re.compile(r"^\\d{1,6}(?:\\.\\d{1,3})?[xX]$")
+MULTIPLIER_TEXT = re.compile(r"^\d{1,6}(?:\.\d{1,3})?[xX]$")
 
 
 def _normalize_dom_candidates(value: object) -> tuple[dict[str, object], ...]:
