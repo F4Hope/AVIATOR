@@ -19,7 +19,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Observe sanitized Aviator traffic in a local persistent browser."
     )
     parser.add_argument("--output", default="aviator-network-probe.jsonl")
-    parser.add_argument("--browser", choices=("msedge", "chrome"), default="msedge")
+    parser.add_argument("--cdp-url", default="http://127.0.0.1:9222")
     return parser
 
 
@@ -33,13 +33,11 @@ def main(argv: list[str] | None = None) -> int:
         settings = load_settings()
         configure_logging(settings.log_level)
         target_url = os.environ["AIE_BETPAWA_AVIATOR_URL"].strip()
-        profile_dir = settings.data_dir / "browser-profile"
         probe = NativeBrowserProbe(
             NativeBrowserProbeConfig(
                 target_url=target_url,
                 output_path=settings.raw_data_dir / args.output,
-                profile_dir=profile_dir,
-                browser_channel=args.browser,
+                cdp_url=args.cdp_url,
             )
         )
     except (KeyError, OSError, ValueError):
@@ -59,9 +57,8 @@ def main(argv: list[str] | None = None) -> int:
         "Aviator Intelligence Engine\n"
         f"Phase: {DEVELOPMENT_PHASE}\n"
         "Native browser probe: RUNNING\n"
-        f"Browser: {args.browser}\n"
+        f"CDP endpoint: {probe.config.cdp_url}\n"
         f"Source label: {DEFAULT_SOURCE}\n"
-        f"Persistent profile: {probe.config.profile_dir}\n"
         f"Sanitized output: {probe.config.output_path}\n"
         "Use the opened browser manually. No cookies, headers, query strings, passwords, "
         "tokens, or raw payload values are written to the probe file."
