@@ -69,9 +69,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     try:
         probe.run()
-    except (OSError, RuntimeError, ValueError):
+    except (OSError, RuntimeError, ValueError) as exc:
         logging.getLogger("aie.probe_aviator_native").error(
-            "Native browser probe stopped unexpectedly. Check the installed browser and session."
+            "Native browser probe stopped unexpectedly (%s). "
+            "The supervisor may reattach if Edge CDP remains available.",
+            type(exc).__name__,
+        )
+        return 1
+    except Exception as exc:
+        logging.getLogger("aie.probe_aviator_native").exception(
+            "Native browser probe crashed with an unexpected %s.",
+            type(exc).__name__,
         )
         return 1
     return 0
