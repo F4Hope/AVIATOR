@@ -7,7 +7,7 @@ import pytest
 
 from collectors.browser_probe import BrowserProbeConfig
 from collectors.network_probe import ProbeWriter, binary_fingerprint, json_shape, payload_metadata, safe_url
-from collectors.probe_analysis import summarize_binary_frame_classes, summarize_live_transports, summarize_marker_class_stats, summarize_marker_correlations, summarize_marker_signature_stats, summarize_probe
+from collectors.probe_analysis import extract_dom_completed_rounds, summarize_binary_frame_classes, summarize_live_transports, summarize_marker_class_stats, summarize_marker_correlations, summarize_marker_signature_stats, summarize_probe
 
 
 def test_safe_url_removes_query_and_fragment() -> None:
@@ -419,3 +419,53 @@ def test_marker_signature_stats_returns_empty_without_marker_file(tmp_path: Path
     probe = tmp_path / "probe.jsonl"
     probe.write_text("", encoding="utf-8")
     assert summarize_marker_signature_stats(probe, tmp_path / "missing.jsonl") == ()
+
+
+
+def test_dom_history_extractor_detects_left_edge_insert(tmp_path: Path) -> None:
+    path = tmp_path / "dom.jsonl"
+    previous = [
+        {"multiplier": value, "x_bucket": x, "y_bucket": 50, "width_bucket": 40, "height_bucket": 20}
+        for x, value in zip((10, 60, 110, 150, 200, 250, 290), ("1.07", "2.41", "1.64", "17.42", "1.33", "1.17", "4.27"))
+    ]
+    current = [
+        {"multiplier": value, "x_bucket": x, "y_bucket": 50, "width_bucket": 40, "height_bucket": 20}
+        for x, value in zip((10, 60, 110, 150, 200, 250, 290, 340), ("44.88", "1.07", "2.41", "1.64", "17.42", "1.33", "1.17", "4.27"))
+    ]
+    rows = [
+        {"kind": "dom_multiplier_snapshot", "observed_at": "2026-10-03T00:00:00Z", "candidates": previous},
+        {"kind": "dom_multiplier_snapshot", "observed_at": "2026-10-03T00:00:01Z", "candidates": current},
+    ]
+    path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+    result = extract_dom_completed_rounds(path)
+    assert len(result) == 1
+    assert result[0].multiplier == "44.88"
+    assert result[0].edge == "left"
+    assert result[0].overlap >= 5
+
+
+def test_dom_history_extractor_ignores_wide_scrolling_values(tmp_path: Path) -> None:
+    path = tmp_path / "dom.jsonl"
+    row = [
+        {"multiplier": str(1 + index / 10), "x_bucket": 270, "y_bucket": 700 + index * 40, "width_bucket": 120, "height_bucket": 20}
+        for index in range(10)
+    ]
+    path.write_text(
+        json.dumps({"kind": "dom_multiplier_snapshot", "observed_at": "2026-10-03T00:00:00Z", "candidates": row}) + "\n",
+        encoding="utf-8",
+    )
+    assert extract_dom_completed_rounds(path) == ()
+
+
+def test_dom_history_extractor_requires_sequence_shift(tmp_path: Path) -> None:
+    path = tmp_path / "dom.jsonl"
+    same = [
+        {"multiplier": value, "x_bucket": x, "y_bucket": 50, "width_bucket": 40, "height_bucket": 20}
+        for x, value in zip((10, 60, 110, 150, 200, 250), ("1.07", "2.41", "1.64", "17.42", "1.33", "1.17"))
+    ]
+    rows = [
+        {"kind": "dom_multiplier_snapshot", "observed_at": "2026-10-03T00:00:00Z", "candidates": same},
+        {"kind": "dom_multiplier_snapshot", "observed_at": "2026-10-03T00:00:01Z", "candidates": same},
+    ]
+    path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+    assert extract_dom_completed_rounds(path) == ()
