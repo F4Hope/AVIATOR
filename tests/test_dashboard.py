@@ -355,6 +355,7 @@ def test_hosted_server_rejects_invalid_public_host(settings: Settings, host: str
 def test_prediction_audit_endpoint_reports_only_locked_scored_rounds(settings: Settings) -> None:
     seed(settings)
     ledger = settings.processed_data_dir / "live-prediction-ledger.jsonl"
+    ledger.parent.mkdir(parents=True, exist_ok=True)
     events = [
         {
             "event": "prediction_locked",
