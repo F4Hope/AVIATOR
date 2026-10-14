@@ -280,6 +280,9 @@ def _score_lock(lock: Mapping[str, object], actual: SourceRound) -> dict[str, ob
             "relative_error": format(relative_error, "f"),
             "within_interval": within_interval,
         }
+    model_details = lock.get("threshold_model_details")
+    model_scores: dict[str, object] = {}
+
     for threshold_text, probability_text in probabilities.items():
         if not isinstance(threshold_text, str):
             raise ValueError("Prediction threshold must be text.")
@@ -287,17 +290,39 @@ def _score_lock(lock: Mapping[str, object], actual: SourceRound) -> dict[str, ob
         outcome = int(actual_multiplier >= threshold)
         if probability_text is None:
             scores[threshold_text] = {"actual": outcome, "brier": None}
+        else:
+            if not isinstance(probability_text, str):
+                raise ValueError("Prediction probability must be decimal text or null.")
+            probability = Decimal(probability_text)
+            brier = ((probability - Decimal(outcome)) ** 2).quantize(
+                SCORE_PLACES, rounding=ROUND_HALF_EVEN
+            )
+            scores[threshold_text] = {
+                "actual": outcome,
+                "brier": format(brier, "f"),
+            }
+
+        if not isinstance(model_details, dict):
             continue
-        if not isinstance(probability_text, str):
-            raise ValueError("Prediction probability must be decimal text or null.")
-        probability = Decimal(probability_text)
-        brier = ((probability - Decimal(outcome)) ** 2).quantize(
-            SCORE_PLACES, rounding=ROUND_HALF_EVEN
-        )
-        scores[threshold_text] = {
-            "actual": outcome,
-            "brier": format(brier, "f"),
+        detail = model_details.get(threshold_text)
+        if not isinstance(detail, dict):
+            continue
+        comparison: dict[str, object] = {
+            "source": detail.get("source"),
+            "reason": detail.get("reason"),
         }
+        for key in ("baseline_probability", "raw_candidate_probability"):
+            value = detail.get(key)
+            score_key = key.replace("_probability", "_brier")
+            if not isinstance(value, str):
+                comparison[score_key] = None
+                continue
+            probability = Decimal(value)
+            brier = ((probability - Decimal(outcome)) ** 2).quantize(
+                SCORE_PLACES, rounding=ROUND_HALF_EVEN
+            )
+            comparison[score_key] = format(brier, "f")
+        model_scores[threshold_text] = comparison
 
     return {
         "event": "prediction_scored",
@@ -308,6 +333,7 @@ def _score_lock(lock: Mapping[str, object], actual: SourceRound) -> dict[str, ob
         "actual_multiplier": actual.multiplier,
         "point_score": point_score,
         "threshold_scores": scores,
+        "threshold_model_scores": model_scores,
     }
 
 
@@ -318,6 +344,7 @@ def process_live_prediction_cycle(
     config: BaselineConfig,
     collector_session_id: str | None = None,
     adaptive_config: AdaptiveConfig | None = None,
+    challenger_config: ThresholdChallengerConfig | None = None,
 ) -> tuple[dict[str, object], ...]:
     """Synchronize DOM results, score an existing lock, then lock the next result.
 
@@ -349,7 +376,13 @@ def process_live_prediction_cycle(
                 return tuple(emitted)
 
         if rounds:
-            lock = _prediction_lock(rounds, config, collector_session_id, adaptive_config)
+            lock = _prediction_lock(
+                rounds,
+                config,
+                collector_session_id,
+                adaptive_config,
+                challenger_config,
+            )
             _append_ledger(ledger_path, lock)
             emitted.append(lock)
         return tuple(emitted)
@@ -384,7 +417,13 @@ def process_live_prediction_cycle(
         _append_ledger(ledger_path, gap)
         emitted.append(gap)
 
-    lock = _prediction_lock(rounds, config, collector_session_id, adaptive_config)
+    lock = _prediction_lock(
+        rounds,
+        config,
+        collector_session_id,
+        adaptive_config,
+        challenger_config,
+    )
     _append_ledger(ledger_path, lock)
     emitted.append(lock)
     return tuple(emitted)

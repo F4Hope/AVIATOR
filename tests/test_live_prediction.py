@@ -260,3 +260,63 @@ def test_rearm_requires_fresh_completion_before_new_lock(settings: Settings) -> 
     assert process_live_prediction_cycle(
         settings, dom, ledger, config, "collector-session-a"
     ) == ()
+
+
+def test_live_lock_records_gated_threshold_model_details(settings: Settings) -> None:
+    dom = settings.raw_data_dir / "aviator-dom-multipliers.jsonl"
+    ledger = settings.processed_data_dir / "live-prediction-ledger.jsonl"
+
+    history = tuple(
+        "3.00" if index % 2 else "1.10"
+        for index in range(180)
+    )
+    _append_snapshot(dom, "2026-10-03T00:00:00Z", history)
+    _append_snapshot(
+        dom,
+        "2026-10-03T00:00:10Z",
+        ("3.00",) + history,
+    )
+
+    emitted = process_live_prediction_cycle(
+        settings,
+        dom,
+        ledger,
+        BaselineConfig(thresholds=("2",), min_history=20),
+    )
+
+    assert emitted
+    lock = emitted[-1]
+    assert lock["event"] == "prediction_locked"
+    assert lock["model_name"] == "gated-logistic-threshold-ensemble"
+    details = lock["threshold_model_details"]
+    assert isinstance(details, dict)
+    assert "2" in details
+
+
+def test_live_score_records_baseline_and_candidate_comparison(settings: Settings) -> None:
+    dom = settings.raw_data_dir / "aviator-dom-multipliers.jsonl"
+    ledger = settings.processed_data_dir / "live-prediction-ledger.jsonl"
+
+    history = tuple(
+        "3.00" if index % 2 else "1.10"
+        for index in range(180)
+    )
+    first = ("3.00",) + history
+    second = ("1.10",) + first
+
+    _append_snapshot(dom, "2026-10-03T00:00:00Z", history)
+    _append_snapshot(dom, "2026-10-03T00:00:10Z", first)
+
+    config = BaselineConfig(thresholds=("2",), min_history=20)
+    process_live_prediction_cycle(settings, dom, ledger, config)
+
+    _append_snapshot(dom, "2026-10-03T00:00:20Z", second)
+    emitted = process_live_prediction_cycle(settings, dom, ledger, config)
+    score = emitted[0]
+
+    assert score["event"] == "prediction_scored"
+    comparisons = score["threshold_model_scores"]
+    assert isinstance(comparisons, dict)
+    assert "2" in comparisons
+    assert "baseline_brier" in comparisons["2"]
+    assert "raw_candidate_brier" in comparisons["2"]
