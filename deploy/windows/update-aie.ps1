@@ -20,9 +20,10 @@ try {
     & docker compose --env-file .env.tailscale -f docker-compose.tailscale.yml up -d browserless browser-proxy aie
     if ($LASTEXITCODE -ne 0) { throw "AIE services failed to restart." }
 
-    $collector = & docker compose --env-file .env.tailscale -f docker-compose.tailscale.yml --profile collector ps --status running --services
-    if ($collector -contains "collector") {
-        & docker compose --env-file .env.tailscale -f docker-compose.tailscale.yml --profile collector up -d --force-recreate collector
+    $runningProfileServices = & docker compose --env-file .env.tailscale -f docker-compose.tailscale.yml --profile collector ps --status running --services
+    if ($runningProfileServices -contains "collector") {
+        & docker compose --env-file .env.tailscale -f docker-compose.tailscale.yml --profile collector up -d --force-recreate collector predictor
+        if ($LASTEXITCODE -ne 0) { throw "Collector/predictor services failed to restart." }
     }
 
     Write-Host "AIE updated." -ForegroundColor Green
