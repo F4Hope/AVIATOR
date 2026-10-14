@@ -18,6 +18,7 @@
       <a href="#overview" class="nav-primary"><span aria-hidden="true">▦</span> Overview</a>
       <a href="#distribution"><span aria-hidden="true">▤</span> Distribution</a>
       <a href="#quality"><span aria-hidden="true">◈</span> Data coverage</a>
+      <a href="#predictions"><span aria-hidden="true">◎</span> Live predictions</a>
       <a href="#project-status"><span aria-hidden="true">◉</span> Project status</a>
     </nav>
     <div class="sidebar-footer"><span class="eyebrow">LOCAL DATASET</span><p>Historical records.<br>Read-only exploration.</p><span class="sidebar-tag">SQLite · schema <span id="sidebar-schema">—</span></span></div>
@@ -64,13 +65,25 @@
         <dl class="window-details"><div><dt>First completed round · UTC</dt><dd id="first">—</dd></div><div><dt>Last completed round · UTC</dt><dd id="last">—</dd></div><div><dt>Sources represented</dt><dd id="source-count">—</dd></div></dl>
         <p class="small-note">The download contains this displayed aggregate report, including its filters. It contains no raw round payloads.</p>
       </section>
+      <section id="predictions" class="panel prediction-panel">
+        <div class="panel-heading"><div><span class="eyebrow">PROSPECTIVE · LOCKED BEFORE RESULT</span><h2>Prediction performance</h2></div><span class="panel-tag">Brier · calibration</span></div>
+        <p class="panel-description">Only future rounds that were genuinely locked before their result are counted. Lower Brier is better; positive skill means the chosen forecast beat the historical baseline on the same outcomes.</p>
+        <div class="prediction-summary">
+          <div><span>Scored locks</span><strong id="prediction-scored">—</strong></div>
+          <div><span>Invalidated</span><strong id="prediction-invalidated">—</strong></div>
+          <div><span>Unpredicted gaps</span><strong id="prediction-gaps">—</strong></div>
+        </div>
+        <div id="prediction-empty" class="empty-state prediction-empty"><span class="empty-symbol" aria-hidden="true">◎</span><h3>No scored live predictions yet</h3><p>Run the collector and predictor continuously. This panel will populate only after future locked forecasts receive real outcomes.</p></div>
+        <div id="prediction-thresholds" class="prediction-thresholds" hidden></div>
+        <p class="small-note">The raw challenger is allowed to affect the live forecast only after a separate chronological gate demonstrates sufficient Brier improvement. No metric here guarantees a future result.</p>
+      </section>
       <section id="project-status" class="panel status-panel">
         <div class="panel-heading"><div><span class="eyebrow">PHASE <span class="development-phase">—</span></span><h2>Project status</h2></div><span id="environment" class="panel-tag">—</span></div>
-        <dl class="status-list"><div><dt>Database connection</dt><dd id="database-state" class="status-neutral">Checking</dd></div><div><dt>Local JSON import</dt><dd>Available via CLI</dd></div><div><dt>Round export</dt><dd>Available via CLI</dd></div><div><dt>Database backups</dt><dd>Available via CLI</dd></div><div><dt>Live collection</dt><dd class="status-neutral">Not connected</dd></div><div><dt>Prediction engine</dt><dd class="status-neutral">Not implemented</dd></div></dl>
+        <dl class="status-list"><div><dt>Database connection</dt><dd id="database-state" class="status-neutral">Checking</dd></div><div><dt>Local JSON import</dt><dd>Available via CLI</dd></div><div><dt>Round export</dt><dd>Available via CLI</dd></div><div><dt>Database backups</dt><dd>Available via CLI</dd></div><div><dt>Live collection</dt><dd class="status-neutral">Not connected</dd></div><div><dt>Prediction engine</dt><dd>Gated live ensemble available</dd></div></dl>
         <p class="small-note">This dashboard reads stored history. Data imports remain an explicit command-line action.</p>
       </section>
     </div>
-    <footer class="page-footer"><span>AIE · Phase <span class="development-phase">—</span> · Local research dashboard</span><span>No live connection · Offline ML experiments available</span></footer>
+    <footer class="page-footer"><span>AIE · Phase <span class="development-phase">—</span> · Local research dashboard</span><span>Prospective locking · Gated challenger · Live scoring audit</span></footer>
   </main>
 </body>
 </html>

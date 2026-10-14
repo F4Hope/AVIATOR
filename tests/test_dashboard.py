@@ -101,7 +101,7 @@ def test_empty_database_has_real_empty_states(settings: Settings) -> None:
         metadata = json.loads(body)
         assert status == 200 and metadata["sources"] == []
         assert metadata["phase"] == 9 and metadata["schema_version"] == 1
-        assert metadata["prediction_engine"] == "ML_EXPERIMENTS_AVAILABLE"
+        assert metadata["prediction_engine"] == "LIVE_GATED_ENSEMBLE_AVAILABLE"
         assert metadata["live_collection"] == "DISCOVERY_PROBE_AVAILABLE"
         status, _, body = request(server, "/api/summary")
     report = json.loads(body)
@@ -350,3 +350,69 @@ def test_hosted_server_accepts_configured_public_host(settings: Settings) -> Non
 def test_hosted_server_rejects_invalid_public_host(settings: Settings, host: str) -> None:
     with pytest.raises(ValueError):
         DashboardHTTPServer(settings, port=0, public_hosts=(host,))
+
+
+def test_prediction_audit_endpoint_reports_only_locked_scored_rounds(settings: Settings) -> None:
+    seed(settings)
+    ledger = settings.processed_data_dir / "live-prediction-ledger.jsonl"
+    events = [
+        {
+            "event": "prediction_locked",
+            "ledger_version": 1,
+            "lock_id": "lock-a",
+            "threshold_probabilities": {"2": "0.800000"},
+            "threshold_model_details": {
+                "2": {
+                    "source": "gated_logistic_challenger",
+                    "reason": "chronological_gate_passed",
+                    "baseline_probability": "0.600000",
+                    "raw_candidate_probability": "0.900000",
+                }
+            },
+        },
+        {
+            "event": "prediction_scored",
+            "ledger_version": 1,
+            "lock_id": "lock-a",
+            "actual_multiplier": "3.0",
+        },
+    ]
+    ledger.write_text(
+        "".join(json.dumps(event) + "\n" for event in events),
+        encoding="utf-8",
+    )
+
+    with running(settings) as server:
+        status, _, body = request(server, "/api/predictions")
+    document = json.loads(body)
+
+    assert status == 200
+    assert document["status"] == "COMPLETE"
+    assert document["scored_locks"] == 1
+    assert document["thresholds"][0]["threshold"] == "2"
+    assert document["thresholds"][0]["mean_chosen_brier"] == "0.040000"
+    assert document["thresholds"][0]["mean_baseline_brier"] == "0.160000"
+
+
+def test_prediction_audit_endpoint_has_empty_state_without_ledger(settings: Settings) -> None:
+    seed(settings)
+    with running(settings) as server:
+        status, _, body = request(server, "/api/predictions")
+    document = json.loads(body)
+
+    assert status == 200
+    assert document == {
+        "status": "NO_SCORED_PREDICTIONS",
+        "scored_locks": 0,
+        "invalidated_locks": 0,
+        "unpredicted_rounds": 0,
+        "thresholds": [],
+    }
+
+
+def test_prediction_audit_endpoint_rejects_query(settings: Settings) -> None:
+    seed(settings)
+    with running(settings) as server:
+        status, _, body = request(server, "/api/predictions?source=x")
+    assert status == 400
+    assert json.loads(body) == {"error": "INVALID_FILTERS"}

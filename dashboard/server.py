@@ -18,6 +18,8 @@ from config.settings import DEVELOPMENT_PHASE, Settings
 from database.database import connect_database_readonly
 from database.migrations import SchemaVersionError, verify_schema
 from database.models import identifier
+from evaluation.live_threshold_audit import audit_live_thresholds
+from prediction.live import DEFAULT_LEDGER_FILENAME, _load_ledger
 
 
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
@@ -52,7 +54,77 @@ def dashboard_metadata(settings: Settings) -> dict[str, object]:
         "phase": DEVELOPMENT_PHASE, "environment": settings.environment,
         "database": "READY", "schema_version": version,
         "sources": sources, "source_suggestions_truncated": len(source_rows) > MAX_SOURCE_SUGGESTIONS,
-        "live_collection": "DISCOVERY_PROBE_AVAILABLE", "prediction_engine": "ML_EXPERIMENTS_AVAILABLE",
+        "live_collection": "DISCOVERY_PROBE_AVAILABLE",
+        "prediction_engine": "LIVE_GATED_ENSEMBLE_AVAILABLE",
+    }
+
+
+def prediction_performance(settings: Settings) -> dict[str, object]:
+    """Summarize only prospectively locked-and-scored live predictions."""
+    ledger_path = settings.processed_data_dir / DEFAULT_LEDGER_FILENAME
+    if not ledger_path.exists():
+        return {
+            "status": "NO_SCORED_PREDICTIONS",
+            "scored_locks": 0,
+            "invalidated_locks": 0,
+            "unpredicted_rounds": 0,
+            "thresholds": [],
+        }
+
+    report = audit_live_thresholds(_load_ledger(ledger_path))
+    return {
+        "status": "COMPLETE" if report.scored_locks else "NO_SCORED_PREDICTIONS",
+        "scored_locks": report.scored_locks,
+        "invalidated_locks": report.invalidated_locks,
+        "unpredicted_rounds": report.unpredicted_rounds,
+        "thresholds": [
+            {
+                "threshold": format(item.threshold, "f"),
+                "scored_forecasts": item.scored_forecasts,
+                "challenger_selected": item.challenger_selected,
+                "challenger_selection_rate": (
+                    None
+                    if item.challenger_selection_rate is None
+                    else format(item.challenger_selection_rate, "f")
+                ),
+                "mean_chosen_brier": (
+                    None
+                    if item.mean_chosen_brier is None
+                    else format(item.mean_chosen_brier, "f")
+                ),
+                "mean_baseline_brier": (
+                    None
+                    if item.mean_baseline_brier is None
+                    else format(item.mean_baseline_brier, "f")
+                ),
+                "mean_raw_candidate_brier": (
+                    None
+                    if item.mean_raw_candidate_brier is None
+                    else format(item.mean_raw_candidate_brier, "f")
+                ),
+                "chosen_skill_vs_baseline_pct": (
+                    None
+                    if item.chosen_skill_vs_baseline_pct is None
+                    else format(item.chosen_skill_vs_baseline_pct, "f")
+                ),
+                "average_forecast": (
+                    None
+                    if item.average_forecast is None
+                    else format(item.average_forecast, "f")
+                ),
+                "observed_rate": (
+                    None
+                    if item.observed_rate is None
+                    else format(item.observed_rate, "f")
+                ),
+                "calibration_gap": (
+                    None
+                    if item.calibration_gap is None
+                    else format(item.calibration_gap, "f")
+                ),
+            }
+            for item in report.thresholds
+        ],
     }
 
 
@@ -194,6 +266,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 document = dashboard_metadata(self.server.settings)
             except (OSError, ValueError, sqlite3.Error, RuntimeError):
                 self._json(503, {"error": "DATABASE_NOT_READY"})
+                return
+            self._json(200, document)
+            return
+        if parsed.path == "/api/predictions":
+            if parsed.query:
+                self._json(400, {"error": "INVALID_FILTERS"})
+                return
+            try:
+                document = prediction_performance(self.server.settings)
+            except (OSError, ValueError, RuntimeError, json.JSONDecodeError):
+                self._json(503, {"error": "PREDICTION_AUDIT_UNAVAILABLE"})
                 return
             self._json(200, document)
             return

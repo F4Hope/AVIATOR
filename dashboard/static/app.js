@@ -15,6 +15,7 @@ const errors = {
   DATABASE_UNAVAILABLE: "The database could not be read. Check the application configuration and file permissions, then refresh.",
   ANALYSIS_UNAVAILABLE: "This selection cannot be analyzed. It may exceed 100,000 rounds or contain invalid stored data. Narrow the filters, or check the records using the command-line tools.",
   ANALYSIS_BUSY: "The dashboard is processing other requests. Try refreshing shortly.",
+  PREDICTION_AUDIT_UNAVAILABLE: "Live prediction audit is temporarily unavailable.",
 };
 let currentReport = null;
 let activeFilters = new URLSearchParams();
@@ -52,6 +53,77 @@ function renderCoverage(quality, selected) {
     row.append(heading, progress(count, selected, `${label}: ${amount.textContent}`));
     container.append(row);
   }
+}
+
+function decimalPct(value) {
+  if (value === null || value === undefined) return "—";
+  return `${(Number(value) * 100).toFixed(1)}%`;
+}
+function brier(value) {
+  return value === null || value === undefined ? "—" : Number(value).toFixed(4);
+}
+function signedPercent(value) {
+  if (value === null || value === undefined) return "—";
+  const number = Number(value);
+  return `${number >= 0 ? "+" : ""}${number.toFixed(1)}%`;
+}
+function clearPredictionAudit() {
+  text("prediction-scored", "—");
+  text("prediction-invalidated", "—");
+  text("prediction-gaps", "—");
+  byId("prediction-thresholds").replaceChildren();
+  byId("prediction-thresholds").hidden = true;
+  byId("prediction-empty").hidden = false;
+}
+function renderPredictionAudit(report) {
+  if (report === null) {
+    clearPredictionAudit();
+    byId("prediction-empty").querySelector("h3").textContent = "Prediction audit unavailable";
+    byId("prediction-empty").querySelector("p").textContent = "The historical dashboard is still available. Check the live prediction ledger and refresh.";
+    return;
+  }
+  text("prediction-scored", number(report.scored_locks));
+  text("prediction-invalidated", number(report.invalidated_locks));
+  text("prediction-gaps", number(report.unpredicted_rounds));
+  const container = byId("prediction-thresholds");
+  container.replaceChildren();
+  for (const item of report.thresholds) {
+    const row = document.createElement("div");
+    row.className = "prediction-row";
+    const heading = document.createElement("div");
+    heading.className = "prediction-row-heading";
+    const threshold = document.createElement("strong");
+    threshold.textContent = `≥ ${item.threshold}×`;
+    const samples = document.createElement("span");
+    samples.textContent = `${number(item.scored_forecasts)} scored`;
+    heading.append(threshold, samples);
+
+    const metrics = document.createElement("div");
+    metrics.className = "prediction-row-metrics";
+    const values = [
+      ["Chosen Brier", brier(item.mean_chosen_brier)],
+      ["Baseline Brier", brier(item.mean_baseline_brier)],
+      ["Skill vs baseline", signedPercent(item.chosen_skill_vs_baseline_pct)],
+      ["Avg forecast", decimalPct(item.average_forecast)],
+      ["Observed", decimalPct(item.observed_rate)],
+      ["Calibration gap", decimalPct(item.calibration_gap)],
+      ["Challenger used", decimalPct(item.challenger_selection_rate)],
+    ];
+    for (const [label, value] of values) {
+      const metric = document.createElement("div");
+      const name = document.createElement("span");
+      name.textContent = label;
+      const amount = document.createElement("strong");
+      amount.textContent = value;
+      metric.append(name, amount);
+      metrics.append(metric);
+    }
+    row.append(heading, metrics);
+    container.append(row);
+  }
+  const hasRows = report.thresholds.length > 0;
+  container.hidden = !hasRows;
+  byId("prediction-empty").hidden = hasRows;
 }
 
 function clearReport() {
@@ -148,12 +220,16 @@ async function loadReport() {
   byId("refresh").disabled = true;
   try {
     const query = activeFilters.toString();
-    const [metadata, report] = await Promise.all([
-      getJSON("/api/status", signal), getJSON(`/api/summary${query ? `?${query}` : ""}`, signal),
+    const predictionRequest = getJSON("/api/predictions", signal).catch(() => null);
+    const [metadata, report, predictionAudit] = await Promise.all([
+      getJSON("/api/status", signal),
+      getJSON(`/api/summary${query ? `?${query}` : ""}`, signal),
+      predictionRequest,
     ]);
     if (sequence !== requestNumber) return;
     renderMetadata(metadata);
     renderReport(report);
+    renderPredictionAudit(predictionAudit);
   } catch (error) {
     if (sequence !== requestNumber || error.name === "AbortError") return;
     text("error", error instanceof TypeError ? "The dashboard could not be reached. Check that python run_dashboard.py is still running, then refresh." : error.message);
@@ -197,4 +273,5 @@ byId("download").addEventListener("click", () => {
 });
 
 renderCoverage(null, 0);
+clearPredictionAudit();
 loadReport();
