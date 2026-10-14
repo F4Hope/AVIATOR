@@ -75,6 +75,28 @@ try {
         throw "Edge did not expose the local debugging endpoint on 127.0.0.1:9222."
     }
 
+    $predictorRunning = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.CommandLine -and
+            $_.CommandLine -like "*run_live_predictions.py*" -and
+            $_.CommandLine -like "*$repoRoot*"
+        } |
+        Select-Object -First 1
+
+    if (-not $predictorRunning) {
+        Write-Host "Starting AIE live predictor..." -ForegroundColor Cyan
+        $predictorArgs = @(
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-Command",
+            ('Set-Location "{0}"; & "{1}" run_live_predictions.py' -f $repoRoot, $python)
+        )
+        Start-Process powershell.exe -WindowStyle Minimized -ArgumentList $predictorArgs
+    }
+    else {
+        Write-Host "AIE live predictor is already running." -ForegroundColor DarkGray
+    }
+
     Write-Host "Attaching AIE collector to normal Edge..." -ForegroundColor Cyan
     & $python probe_aviator_native.py --cdp-url http://127.0.0.1:9222
 }

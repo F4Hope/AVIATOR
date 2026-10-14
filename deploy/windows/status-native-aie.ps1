@@ -19,6 +19,20 @@ try {
     catch {
         Write-Host "Dashboard local status: unavailable" -ForegroundColor Yellow
     }
+
+    $predictor = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.CommandLine -and
+            $_.CommandLine -like "*run_live_predictions.py*" -and
+            $_.CommandLine -like "*$repoRoot*"
+        } |
+        Select-Object -First 1
+    if ($predictor) {
+        Write-Host "Live predictor: running (PID $($predictor.ProcessId))" -ForegroundColor Green
+    }
+    else {
+        Write-Host "Live predictor: not running" -ForegroundColor Yellow
+    }
 }
 finally {
     Pop-Location

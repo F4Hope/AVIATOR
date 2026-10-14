@@ -41,6 +41,22 @@ services:
       browserless:
         condition: service_started
 
+
+  predictor:
+    build: .
+    profiles: ["collector"]
+    command: ["python", "run_live_predictions.py"]
+    environment:
+      AIE_ENVIRONMENT: PRODUCTION
+      AIE_LOG_LEVEL: ${AIE_LOG_LEVEL:-INFO}
+      AIE_DATABASE_FILENAME: ${AIE_DATABASE_FILENAME:-aie.sqlite3}
+    volumes:
+      - aie_data:/app/data
+    restart: unless-stopped
+    depends_on:
+      collector:
+        condition: service_started
+
   browserless:
     image: ghcr.io/browserless/chromium:latest
     environment:
