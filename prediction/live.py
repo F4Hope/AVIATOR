@@ -15,8 +15,12 @@ from collectors.dom_round_ingest import DOM_OBSERVATION_SOURCE, ingest_dom_round
 from config.settings import Settings
 from database.database import connect_database_readonly
 from database.migrations import verify_schema
-from models.baseline import BaselineConfig, predict_thresholds
+from models.baseline import BaselineConfig
 from prediction.adaptive import AdaptiveConfig, predict_next_multiplier
+from prediction.threshold_challenger import (
+    ThresholdChallengerConfig,
+    predict_threshold_ensemble,
+)
 
 
 LEDGER_VERSION = 1
@@ -189,20 +193,20 @@ def _prediction_lock(
     config: BaselineConfig,
     collector_session_id: str | None = None,
     adaptive_config: AdaptiveConfig | None = None,
+    challenger_config: ThresholdChallengerConfig | None = None,
 ) -> dict[str, object]:
     if not rounds:
         raise ValueError("At least one completed round is required before locking a prediction.")
 
     history = [round.multiplier for round in rounds]
-    prediction = predict_thresholds(history, config)
+    prediction = predict_threshold_ensemble(
+        history,
+        config,
+        challenger_config,
+    )
     point = predict_next_multiplier(history, adaptive_config)
     locked_at = _utc_now_text()
-    probabilities = {
-        str(item.threshold): (
-            None if item.probability is None else format(item.probability, "f")
-        )
-        for item in prediction.probabilities
-    }
+    probabilities = prediction.probability_map()
     last = rounds[-1]
     return {
         "event": "prediction_locked",
@@ -212,15 +216,16 @@ def _prediction_lock(
         "model_name": prediction.model_name,
         "model_version": prediction.model_version,
         "status": prediction.status,
-        "mode": prediction.mode,
-        "window": prediction.window,
-        "min_history": prediction.min_history,
+        "mode": config.mode,
+        "window": config.window,
+        "min_history": config.min_history,
         "history_count": len(rounds),
         "history_last_round_id": last.round_id,
         "history_last_timestamp": last.timestamp,
         "timing_guarantee": "locked_before_next_completed_result",
         "collector_session_id": collector_session_id,
         "threshold_probabilities": probabilities,
+        "threshold_model_details": prediction.detail_map(),
         "point_model_name": point.model_name,
         "point_model_version": point.model_version,
         "point_status": point.status,
