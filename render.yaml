@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: aie-aviator
+    runtime: docker
+    repo: https://github.com/F4Hope/AVIATOR
+    branch: main
+    plan: free
+    dockerCommand: python run_render_web.py
+    healthCheckPath: /healthz
+    autoDeployTrigger: checksPass
+    renderSubdomainPolicy: enabled
+    envVars:
+      - key: AIE_ENVIRONMENT
+        value: PRODUCTION
+      - key: AIE_LOG_LEVEL
+        value: INFO
+      - key: AIE_DATABASE_FILENAME
+        value: aie.sqlite3
+      - key: AIE_PUBLIC_HOST
+        fromService:
+          type: web
+          name: aie-aviator
+          envVarKey: RENDER_EXTERNAL_HOSTNAME
