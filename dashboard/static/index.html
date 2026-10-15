@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>AIE · Historical overview</title>
+  <title>AIE · Live Aviator Intelligence</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="/styles.css">
   <script src="/app.js" defer></script>
@@ -15,7 +15,7 @@
     <a class="brand" href="/" aria-label="Aviator Intelligence Engine home"><span class="brand-mark">A</span><span>AIE<small>AVIATOR INTELLIGENCE</small></span></a>
     <div class="phase-label"><span class="dot"></span> PHASE <span class="development-phase">—</span> <span>Dashboard</span></div>
     <nav>
-      <a href="#overview" class="nav-primary"><span aria-hidden="true">▦</span> Overview</a>
+      <a href="#live-forecast" class="nav-primary"><span aria-hidden="true">◎</span> Live forecast</a>
       <a href="#distribution"><span aria-hidden="true">▤</span> Distribution</a>
       <a href="#quality"><span aria-hidden="true">◈</span> Data coverage</a>
       <a href="#predictions"><span aria-hidden="true">◎</span> Live predictions</a>
@@ -25,9 +25,21 @@
   </aside>
   <main id="main">
     <header id="overview" class="page-header">
-      <div><div class="eyebrow">AVIATOR INTELLIGENCE ENGINE / RESEARCH</div><h1>Historical overview<span class="accent">.</span></h1><p class="subtitle">Explore completed rounds stored in your project.</p></div>
-      <div class="header-actions"><span class="badge">READ ONLY</span><button id="refresh" class="button secondary" type="button"><span aria-hidden="true">↻</span> Refresh</button></div>
+      <div><div class="eyebrow">AVIATOR INTELLIGENCE ENGINE / LIVE RESEARCH</div><h1>Live prediction console<span class="accent">.</span></h1><p class="subtitle">Prospective forecasts are locked before the next completed Aviator result.</p></div>
+      <div class="header-actions"><a id="betpawa-session" class="button primary" href="#" target="_blank" rel="noopener noreferrer" aria-disabled="true">BETPAWA SESSION</a><button id="refresh" class="button secondary" type="button"><span aria-hidden="true">↻</span> Refresh</button></div>
     </header>
+    <section id="live-forecast" class="panel live-forecast-panel">
+      <div class="panel-heading"><div><span class="eyebrow">CURRENT PRE-ROUND LOCK</span><h2>Next-round probability forecast</h2></div><span id="live-forecast-status" class="panel-tag">Starting</span></div>
+      <p class="panel-description">These probabilities are created from completed history only and are frozen before the next observed result. They are not guarantees.</p>
+      <div class="live-probabilities">
+        <div><span>P(≥1.5×)</span><strong id="live-p15">—</strong><small id="live-p15-source">—</small></div>
+        <div><span>P(≥2×)</span><strong id="live-p2">—</strong><small id="live-p2-source">—</small></div>
+        <div><span>P(≥5×)</span><strong id="live-p5">—</strong><small id="live-p5-source">—</small></div>
+        <div><span>Point estimate</span><strong id="live-point">—</strong><small id="live-interval">—</small></div>
+      </div>
+      <div class="live-meta"><span>History: <strong id="live-history">—</strong></span><span>Locked: <strong id="live-locked-at">—</strong></span><span>Regime: <strong id="live-regime">—</strong></span></div>
+      <div id="live-message" class="small-note">Waiting for the hosted browser collector to establish a continuous Aviator session.</div>
+    </section>
     <section class="filter-panel" aria-label="Historical data filters">
       <form id="filters">
         <div class="field source-field"><label for="source">Source</label><input id="source" name="source" list="source-options" placeholder="All sources" autocomplete="off"><datalist id="source-options"></datalist></div>
@@ -83,7 +95,7 @@
         <p class="small-note">This dashboard reads stored history. Data imports remain an explicit command-line action.</p>
       </section>
     </div>
-    <footer class="page-footer"><span>AIE · Phase <span class="development-phase">—</span> · Local research dashboard</span><span>Prospective locking · Gated challenger · Live scoring audit</span></footer>
+    <footer class="page-footer"><span>AIE · Phase <span class="development-phase">—</span> · Hosted prospective research</span><span>Prospective locking · Gated challenger · Live scoring audit</span></footer>
   </main>
 </body>
 </html>

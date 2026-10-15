@@ -974,3 +974,67 @@ progress::-moz-progress-bar {
     grid-template-columns:repeat(2,minmax(0,1fr));
   }
 }
+
+.live-forecast-panel {
+  margin-bottom:20px;
+  border-color:#37675d;
+  background:linear-gradient(120deg,#132725,#141c27 55%);
+}
+.live-probabilities {
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:12px;
+  margin:18px 0 14px;
+}
+.live-probabilities>div {
+  border:1px solid var(--border);
+  border-radius:10px;
+  background:#0f1822;
+  padding:15px;
+  display:grid;
+  gap:5px;
+}
+.live-probabilities span {
+  color:var(--muted);
+  font-size:9px;
+  letter-spacing:.5px;
+}
+.live-probabilities strong {
+  color:var(--teal);
+  font-size:24px;
+  line-height:1.2;
+}
+.live-probabilities small {
+  color:#aebccc;
+  font-size:8px;
+}
+.live-meta {
+  display:flex;
+  flex-wrap:wrap;
+  gap:18px;
+  padding-top:12px;
+  border-top:1px solid var(--border);
+  color:var(--muted);
+  font-size:9px;
+}
+.live-meta strong {
+  color:var(--text);
+  font-weight:550;
+}
+#betpawa-session[aria-disabled="true"] {
+  opacity:.5;
+  pointer-events:none;
+}
+@media(max-width:850px) {
+  .live-probabilities {
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+}
+@media(max-width:560px) {
+  .live-probabilities {
+    grid-template-columns:1fr 1fr;
+  }
+  .live-probabilities strong {
+    font-size:21px;
+  }
+}

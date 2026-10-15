@@ -16,6 +16,8 @@ const errors = {
   ANALYSIS_UNAVAILABLE: "This selection cannot be analyzed. It may exceed 100,000 rounds or contain invalid stored data. Narrow the filters, or check the records using the command-line tools.",
   ANALYSIS_BUSY: "The dashboard is processing other requests. Try refreshing shortly.",
   PREDICTION_AUDIT_UNAVAILABLE: "Live prediction audit is temporarily unavailable.",
+  CURRENT_PREDICTION_UNAVAILABLE: "Current prediction is temporarily unavailable.",
+  BROWSER_SESSION_UNAVAILABLE: "The interactive BetPawa session is not ready yet.",
 };
 let currentReport = null;
 let activeFilters = new URLSearchParams();
@@ -124,6 +126,61 @@ function renderPredictionAudit(report) {
   const hasRows = report.thresholds.length > 0;
   container.hidden = !hasRows;
   byId("prediction-empty").hidden = hasRows;
+}
+
+function sourceLabel(details, key) {
+  if (!details || !details[key]) return "baseline";
+  return details[key].source === "gated_logistic_challenger" ? "gated challenger" : "historical baseline";
+}
+function renderCurrentPrediction(report) {
+  const probabilities = report && report.threshold_probabilities ? report.threshold_probabilities : {};
+  const details = report && report.threshold_model_details ? report.threshold_model_details : {};
+  const locked = report && report.status === "LOCKED";
+
+  text("live-forecast-status", locked ? "LOCKED" : (report ? report.status.replaceAll("_", " ") : "UNAVAILABLE"));
+  text("live-p15", locked ? decimalPct(probabilities["1.5"]) : "—");
+  text("live-p2", locked ? decimalPct(probabilities["2"]) : "—");
+  text("live-p5", locked ? decimalPct(probabilities["5"]) : "—");
+  text("live-p15-source", locked ? sourceLabel(details, "1.5") : "—");
+  text("live-p2-source", locked ? sourceLabel(details, "2") : "—");
+  text("live-p5-source", locked ? sourceLabel(details, "5") : "—");
+  text("live-point", locked && report.predicted_multiplier ? `${report.predicted_multiplier}×` : "—");
+  const interval = locked ? report.prediction_interval : null;
+  text("live-interval", interval && interval.lower && interval.upper ? `${interval.lower}× – ${interval.upper}×` : "—");
+  text("live-history", locked && report.history_count !== null ? number(report.history_count) : "—");
+  text("live-locked-at", locked && report.locked_at ? utc(report.locked_at) : "—");
+  text("live-regime", locked && report.regime ? report.regime : "—");
+  text(
+    "live-message",
+    locked
+      ? "Forecast is frozen for the next completed result. The score will be written only after that result is observed."
+      : "Waiting for continuous live Aviator observations before the next forecast can be locked."
+  );
+}
+function renderBrowserSession(session) {
+  const link = byId("betpawa-session");
+  if (session && session.status === "READY" && session.live_url) {
+    link.href = session.live_url;
+    link.setAttribute("aria-disabled", "false");
+    link.textContent = "OPEN BETPAWA SESSION";
+    return;
+  }
+  link.removeAttribute("href");
+  link.setAttribute("aria-disabled", "true");
+  link.textContent = "BETPAWA SESSION STARTING";
+}
+async function loadLiveState() {
+  try {
+    const [prediction, session] = await Promise.all([
+      getJSON("/api/current-prediction"),
+      getJSON("/api/browser-session").catch(() => null),
+    ]);
+    renderCurrentPrediction(prediction);
+    renderBrowserSession(session);
+  } catch (_) {
+    renderCurrentPrediction(null);
+    renderBrowserSession(null);
+  }
 }
 
 function clearReport() {
@@ -274,4 +331,8 @@ byId("download").addEventListener("click", () => {
 
 renderCoverage(null, 0);
 clearPredictionAudit();
+renderCurrentPrediction(null);
+renderBrowserSession(null);
+loadLiveState();
 loadReport();
+setInterval(loadLiveState, 5000);

@@ -1,7 +1,9 @@
 """Local dashboard server; serve allowlisted assets and read-only aggregates."""
 
+import base64
 from contextlib import closing
 from datetime import datetime
+import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import logging
@@ -19,7 +21,7 @@ from database.database import connect_database_readonly
 from database.migrations import SchemaVersionError, verify_schema
 from database.models import identifier
 from evaluation.live_threshold_audit import audit_live_thresholds
-from prediction.live import DEFAULT_LEDGER_FILENAME, _load_ledger
+from prediction.live import DEFAULT_LEDGER_FILENAME, _load_ledger, _outstanding_lock
 
 
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
@@ -128,6 +130,56 @@ def prediction_performance(settings: Settings) -> dict[str, object]:
     }
 
 
+def current_prediction(settings: Settings) -> dict[str, object]:
+    """Return the currently outstanding pre-result prediction lock, if any."""
+    ledger_path = settings.processed_data_dir / DEFAULT_LEDGER_FILENAME
+    if not ledger_path.exists():
+        return {"status": "WAITING_FOR_LIVE_DATA"}
+
+    events = _load_ledger(ledger_path)
+    lock = _outstanding_lock(events)
+    if lock is None:
+        return {"status": "WAITING_FOR_NEXT_LOCK"}
+
+    probabilities = lock.get("threshold_probabilities")
+    details = lock.get("threshold_model_details")
+    return {
+        "status": "LOCKED",
+        "lock_id": lock.get("lock_id"),
+        "locked_at": lock.get("locked_at"),
+        "history_count": lock.get("history_count"),
+        "history_last_timestamp": lock.get("history_last_timestamp"),
+        "model_name": lock.get("model_name"),
+        "model_version": lock.get("model_version"),
+        "threshold_probabilities": probabilities if isinstance(probabilities, dict) else {},
+        "threshold_model_details": details if isinstance(details, dict) else {},
+        "predicted_multiplier": lock.get("predicted_multiplier"),
+        "prediction_interval": lock.get("prediction_interval"),
+        "point_confidence": lock.get("point_confidence"),
+        "regime": lock.get("regime"),
+    }
+
+
+def browser_session(settings: Settings) -> dict[str, object]:
+    """Return the current interactive Browserless handoff URL without logging it."""
+    path = settings.processed_data_dir / "browser-session.json"
+    if not path.exists():
+        return {"status": "STARTING", "live_url": None}
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict) or value.get("kind") != "browser_live_session":
+        raise ValueError("Browser session metadata is invalid.")
+    live_url = value.get("live_url")
+    if not isinstance(live_url, str) or not live_url.startswith(("http://", "https://")):
+        raise ValueError("Browser session URL is invalid.")
+    return {
+        "status": "READY",
+        "live_url": live_url,
+        "observed_at": value.get("observed_at"),
+        "expires_at": value.get("expires_at"),
+        "collector_session_id": value.get("collector_session_id"),
+    }
+
+
 def _request_filters(query: str) -> AnalysisFilters:
     if re.search(r"%(?![0-9a-fA-F]{2})", query):
         raise ValueError("Malformed query encoding.")
@@ -163,6 +215,24 @@ class DashboardHTTPServer(ThreadingHTTPServer):
             ):
                 raise ValueError("public_hosts must contain plain hostnames or hostname:port values.")
             validated_hosts.add(host.lower())
+        for variable in ("AIE_PUBLIC_HOST", "RAILWAY_PUBLIC_DOMAIN"):
+            host = os.getenv(variable, "").strip().lower()
+            if host:
+                if not re.fullmatch(r"[A-Za-z0-9.-]{1,253}(?::[0-9]{1,5})?", host):
+                    raise ValueError(f"{variable} must be a plain hostname or hostname:port.")
+                validated_hosts.add(host)
+
+        auth_user = os.getenv("AIE_BASIC_AUTH_USER", "")
+        auth_password = os.getenv("AIE_BASIC_AUTH_PASSWORD", "")
+        if bool(auth_user) != bool(auth_password):
+            raise ValueError("AIE basic auth requires both user and password.")
+        self.basic_auth_header = None
+        if auth_user and auth_password:
+            credential = base64.b64encode(
+                f"{auth_user}:{auth_password}".encode("utf-8")
+            ).decode("ascii")
+            self.basic_auth_header = f"Basic {credential}"
+
         self.settings = settings
         self.analysis_slots = BoundedSemaphore(2)
         super().__init__((bind_host, port), DashboardHandler)
@@ -214,7 +284,29 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.close_connection = True
         self._json(code, {"error": "HTTP_REQUEST_REJECTED"})
 
+    def _authorized(self) -> bool:
+        expected = self.server.basic_auth_header
+        if expected is None:
+            return True
+        supplied = self.headers.get("Authorization", "")
+        return hmac.compare_digest(supplied, expected)
+
+    def _unauthorized(self) -> None:
+        body = b'{"error":"AUTHENTICATION_REQUIRED"}\n'
+        self.send_response(401)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("WWW-Authenticate", 'Basic realm="AIE", charset="UTF-8"')
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
     def _guard_request(self, *, api: bool) -> bool:
+        if not self._authorized():
+            self._unauthorized()
+            return False
         hosts = self.headers.get_all("Host", [])
         if len(hosts) != 1 or hosts[0].lower() not in self.server.allowed_authorities:
             self._json(403, {"error": "HOST_NOT_ALLOWED"})
@@ -247,6 +339,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if parsed.scheme or parsed.netloc or parsed.fragment:
             self._json(400, {"error": "INVALID_REQUEST"})
             return
+        if parsed.path == "/healthz":
+            self._send(200, b"ok\n", "text/plain; charset=utf-8")
+            return
         if not self._guard_request(api=parsed.path.startswith("/api/")):
             return
         if parsed.path in STATIC_FILES:
@@ -277,6 +372,28 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 document = prediction_performance(self.server.settings)
             except (OSError, ValueError, RuntimeError, json.JSONDecodeError):
                 self._json(503, {"error": "PREDICTION_AUDIT_UNAVAILABLE"})
+                return
+            self._json(200, document)
+            return
+        if parsed.path == "/api/current-prediction":
+            if parsed.query:
+                self._json(400, {"error": "INVALID_FILTERS"})
+                return
+            try:
+                document = current_prediction(self.server.settings)
+            except (OSError, ValueError, RuntimeError, json.JSONDecodeError):
+                self._json(503, {"error": "CURRENT_PREDICTION_UNAVAILABLE"})
+                return
+            self._json(200, document)
+            return
+        if parsed.path == "/api/browser-session":
+            if parsed.query:
+                self._json(400, {"error": "INVALID_FILTERS"})
+                return
+            try:
+                document = browser_session(self.server.settings)
+            except (OSError, ValueError, json.JSONDecodeError):
+                self._json(503, {"error": "BROWSER_SESSION_UNAVAILABLE"})
                 return
             self._json(200, document)
             return
