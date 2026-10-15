@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import hashlib
 import json
 import logging
@@ -90,12 +90,21 @@ class NativeBrowserProbeConfig:
     cdp_url: str = "http://127.0.0.1:9222"
     dom_output_path: Path | None = None
     heartbeat_path: Path | None = None
+    allow_remote_cdp: bool = False
+    navigate_on_start: bool = False
+    live_session_path: Path | None = None
+    live_url_timeout_ms: int = 7_200_000
 
     def __post_init__(self) -> None:
         if not self.target_url.startswith("https://"):
             raise ValueError("target_url must use https://.")
-        if not self.cdp_url.startswith(("http://127.0.0.1:", "http://localhost:")):
+        if self.allow_remote_cdp:
+            if not self.cdp_url.startswith(("http://", "https://", "ws://", "wss://")):
+                raise ValueError("remote cdp_url must use HTTP(S) or WS(S).")
+        elif not self.cdp_url.startswith(("http://127.0.0.1:", "http://localhost:")):
             raise ValueError("cdp_url must be a localhost HTTP endpoint.")
+        if any(character.isspace() for character in self.cdp_url):
+            raise ValueError("cdp_url cannot contain whitespace.")
         if not isinstance(self.output_path, Path) or self.output_path.suffix.lower() != ".jsonl":
             raise ValueError("output_path must be a .jsonl Path.")
         if self.dom_output_path is not None and (
@@ -108,6 +117,13 @@ class NativeBrowserProbeConfig:
             or self.heartbeat_path.suffix.lower() != ".json"
         ):
             raise ValueError("heartbeat_path must be a .json Path when supplied.")
+        if self.live_session_path is not None and (
+            not isinstance(self.live_session_path, Path)
+            or self.live_session_path.suffix.lower() != ".json"
+        ):
+            raise ValueError("live_session_path must be a .json Path when supplied.")
+        if type(self.live_url_timeout_ms) is not int or not 60_000 <= self.live_url_timeout_ms <= 86_400_000:
+            raise ValueError("live_url_timeout_ms must be between 60000 and 86400000.")
 
 
 def _socket_id(request_id: str) -> str:
@@ -471,12 +487,94 @@ class NativeBrowserProbe:
 
     def _attach_browser(self, browser: Browser) -> None:
         if not browser.contexts:
-            logger.debug("Local Edge currently exposes no browser context.")
+            logger.debug("Browser currently exposes no browser context.")
             return
         for context in browser.contexts:
             context.on("page", self._attach_page)
             for page in context.pages:
                 self._attach_page(page)
+
+    def _ensure_start_page(self, browser: Browser) -> Page | None:
+        if not browser.contexts:
+            return None
+        context = browser.contexts[0]
+        page = next((item for item in context.pages if not item.is_closed()), None)
+        if page is None:
+            page = context.new_page()
+        if self.config.navigate_on_start:
+            try:
+                if not page.url.startswith(self.config.target_url):
+                    page.goto(
+                        self.config.target_url,
+                        wait_until="domcontentloaded",
+                        timeout=60_000,
+                    )
+            except Exception:
+                logger.warning("Initial target navigation failed; interactive session remains available.")
+        self._attach_page(page)
+        return page
+
+    def _publish_live_session(self, page: Page) -> None:
+        path = self.config.live_session_path
+        if path is None:
+            return
+        try:
+            session = page.context.new_cdp_session(page)
+            try:
+                response = session.send(
+                    "Browserless.liveURL",
+                    {
+                        "interactable": True,
+                        "resizable": True,
+                        "showBrowserInterface": True,
+                        "quality": 70,
+                        "timeout": self.config.live_url_timeout_ms,
+                    },
+                )
+            finally:
+                try:
+                    session.detach()
+                except Exception:
+                    pass
+        except Exception:
+            logger.warning("Browserless interactive session URL could not be created.")
+            return
+
+        live_url = response.get("liveURL") if isinstance(response, dict) else None
+        applied_timeout = response.get("timeout") if isinstance(response, dict) else None
+        if not isinstance(live_url, str) or not live_url.startswith(("http://", "https://")):
+            logger.warning("Browserless did not return a usable interactive session URL.")
+            return
+
+        timeout_ms = (
+            int(applied_timeout)
+            if isinstance(applied_timeout, (int, float)) and applied_timeout > 0
+            else self.config.live_url_timeout_ms
+        )
+        now = datetime.now(UTC)
+        document = {
+            "kind": "browser_live_session",
+            "observed_at": now.isoformat(timespec="microseconds").replace("+00:00", "Z"),
+            "expires_at": (now + timedelta(milliseconds=timeout_ms)).isoformat(
+                timespec="microseconds"
+            ).replace("+00:00", "Z"),
+            "live_url": live_url,
+            "collector_session_id": self.collector_session_id,
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        try:
+            temporary.write_text(
+                json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            os.replace(temporary, path)
+        finally:
+            try:
+                if temporary.exists():
+                    temporary.unlink()
+            except OSError:
+                pass
 
     def run(self) -> None:
         """Attach to the existing local browser and observe until stopped.
@@ -489,7 +587,11 @@ class NativeBrowserProbe:
         with sync_playwright() as playwright:
             browser = playwright.chromium.connect_over_cdp(self.config.cdp_url, timeout=30_000)
             self._attach_browser(browser)
-            logger.info("Native probe attached to local Edge over CDP with Network enabled.")
+            start_page = self._ensure_start_page(browser)
+            if start_page is not None and self.config.live_session_path is not None:
+                self._publish_live_session(start_page)
+                self._last_live_session_at = monotonic()
+            logger.info("Browser probe attached over CDP with Network enabled.")
             transient_errors = 0
             try:
                 while not self.stop_event.is_set():
@@ -513,6 +615,11 @@ class NativeBrowserProbe:
                             continue
 
                         now = monotonic()
+                        if self.config.live_session_path is not None:
+                            last_live = getattr(self, "_last_live_session_at", 0.0)
+                            if now - last_live >= 1_800:
+                                self._last_live_session_at = now
+                                self._publish_live_session(open_pages[0])
                         last_scan = getattr(self, "_last_dom_scan_at", 0.0)
                         if now - last_scan >= 0.75:
                             self._last_dom_scan_at = now
